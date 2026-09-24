@@ -61,7 +61,8 @@ fun EnginesSettings(vm: NativeSettingsComponent, state: SettingsState) {
         vm.engines.forEach { descriptor ->
             val engine = descriptor.engine
             EngineStatusCard(descriptor, coding.coding.engines[engine] ?: RuntimeStatus(RuntimePhase.UNKNOWN), engine in coding.coding.preparingEngines,
-                coding.coding.sessions.none { it.running } && coding.coding.preparingEngines.isEmpty(), { vm.prepareCodingRuntime(engine) }, { vm.uninstallCodingRuntime(engine) })
+                coding.coding.sessions.none { it.running } && coding.coding.preparingEngines.isEmpty(), { vm.prepareCodingRuntime(engine) }, { vm.uninstallCodingRuntime(engine) },
+                state.settings.engineExecutables[engine], { vm.selectEngineExecutable(engine) }, { vm.clearEngineExecutable(engine) })
         }
         PaperDivider()
         PaperText("Подписка ChatGPT", role = PaperTextRole.TITLE)
@@ -98,7 +99,8 @@ internal fun EngineAccountSection(descriptor: BackendAgentDescriptor, status: Ru
 }
 
 @Composable
-internal fun EngineStatusCard(descriptor: BackendAgentDescriptor, status: RuntimeStatus, preparing: Boolean, canRemove: Boolean, onPrepare: () -> Unit, onRemove: () -> Unit) {
+internal fun EngineStatusCard(descriptor: BackendAgentDescriptor, status: RuntimeStatus, preparing: Boolean, canRemove: Boolean, onPrepare: () -> Unit, onRemove: () -> Unit,
+    selectedExecutable: String? = null, onSelectExecutable: () -> Unit = {}, onClearExecutable: () -> Unit = {}) {
     PaperPanel(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -110,11 +112,16 @@ internal fun EngineStatusCard(descriptor: BackendAgentDescriptor, status: Runtim
                 if (status.version.isNotBlank()) PaperText("v${status.version}", role = PaperTextRole.LABEL)
             }
             if (status.detail.isNotBlank()) PaperText(status.detail, role = PaperTextRole.LABEL)
+            if (selectedExecutable != null) PaperText("Выбрано приложение: $selectedExecutable", role = PaperTextRole.LABEL)
             PaperText(descriptor.summary, role = PaperTextRole.LABEL)
             PaperText(descriptor.providerSummary, role = PaperTextRole.LABEL)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (preparing) PaperProgress(Modifier.size(20.dp), kind = PaperProgressKind.CIRCULAR, label = "Подготовка")
                 PaperButton(if (BackendAgentCapability.EXTERNAL_INSTALLATION in descriptor.capabilities) "Проверить" else "Подготовить", onPrepare, kind = PaperButtonKind.QUIET, enabled = !preparing && status.phase != RuntimePhase.UNSUPPORTED)
+                if (BackendAgentCapability.EXECUTABLE_SELECTION in descriptor.capabilities) {
+                    PaperButton("Выбрать приложение", onSelectExecutable, kind = PaperButtonKind.QUIET, enabled = !preparing && status.phase != RuntimePhase.UNSUPPORTED)
+                    if (selectedExecutable != null) PaperButton("Сбросить выбор", onClearExecutable, kind = PaperButtonKind.QUIET, enabled = !preparing && status.phase != RuntimePhase.UNSUPPORTED)
+                }
                 if (BackendAgentCapability.MANAGED_INSTALLATION in descriptor.capabilities) PaperButton("Удалить зависимости", onRemove, kind = PaperButtonKind.QUIET, enabled = canRemove && !preparing && status.phase != RuntimePhase.UNSUPPORTED)
             }
         }

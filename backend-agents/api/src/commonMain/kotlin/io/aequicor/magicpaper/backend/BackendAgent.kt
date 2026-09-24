@@ -23,6 +23,8 @@ data class NativeBackendEnvironment(
     val json: Json,
     val home: String,
     val commandOverride: String? = null,
+    /** The executable the person selected in the settings; read per lookup, so a fresh choice applies without a restart. */
+    val commandSelection: () -> String? = { null },
     val resources: NativeResources,
     val processes: NativeProcessRecovery,
     val cachedAccessTokens: NativeAuthTokens,

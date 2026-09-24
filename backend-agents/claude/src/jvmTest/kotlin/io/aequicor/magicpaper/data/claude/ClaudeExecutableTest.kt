@@ -39,6 +39,35 @@ class ClaudeExecutableTest {
         } finally { home.deleteRecursively() }
     }
 
+    @Test fun windowsShimsAndVendorPrefixesAreFoundWithoutAShellPath() {
+        val home = Files.createTempDirectory("claude-locate").toFile()
+        try {
+            val npm = home.resolve("roaming/npm").apply { mkdirs() }
+            val shim = File(npm, "claude.cmd").apply { writeText("") }
+            val byPrefix = ClaudeExecutable(null, { if (it == "APPDATA") home.resolve("roaming").path else null }, home.path, windows = true, mac = false)
+            assertEquals(shim, byPrefix.find(), "npm's Windows prefix keeps a .cmd shim alone")
+            assertContains(byPrefix.candidates(), shim)
+            val executable = File(npm, "claude.exe").apply { writeText("") }
+            val onPath = ClaudeExecutable(null, { if (it == "PATH") npm.path else null }, home.path, windows = true, mac = false)
+            assertEquals(executable, onPath.find(), "The executable wins over the shim of the same directory")
+            val native = File(home, ".local/bin/claude.exe").apply { parentFile.mkdirs(); writeText("") }
+            assertEquals(native, ClaudeExecutable(null, { null }, home.path, windows = true, mac = false).find())
+        } finally { home.deleteRecursively() }
+    }
+
+    @Test fun selectedExecutableIsAuthoritativeOverTheEnvironmentVariable() {
+        val home = Files.createTempDirectory("claude-locate").toFile()
+        try {
+            val fromVariable = script(home, "true", "claude-variable")
+            val chosen = script(home, "true", "claude-chosen")
+            val finder = ClaudeExecutable(null, { if (it == ClaudeExecutable.OVERRIDE_VARIABLE) fromVariable.path else null },
+                home.path, windows = false, selected = { chosen.path })
+            assertEquals(chosen, finder.find())
+            val absent = ClaudeExecutable(null, { null }, home.path, windows = false, selected = { home.resolve("gone").path })
+            assertNull(absent.find(), "A wrong selection is authoritative, like the variable")
+        } finally { home.deleteRecursively() }
+    }
+
     @Test fun desktopAppBundleIsTheLastResortAndTheNewestVersionWins() {
         val home = Files.createTempDirectory("claude-locate").toFile()
         try {

@@ -41,6 +41,8 @@ interface CodingService {
     fun selectCodingSearchProvider(sessionId: String, provider: SearchProvider)
     fun prepareCodingRuntime(engine: CodingEngine = CodingEngine.PI)
     fun uninstallCodingRuntime(engine: CodingEngine = CodingEngine.PI)
+    /** Применяет выбранные исполняемые файлы движков к рантайму немедленно; сохранение настроек владеет сервис настроек. */
+    fun setEngineExecutables(paths: Map<CodingEngine, String>) = Unit
     /** Действие, предложенное рядом с ошибкой; ход виден в [CodingUi.pendingRecoveries], итог — уведомлением. */
     fun recover(recovery: CodingRecovery)
     fun cancelRecovery(recovery: CodingRecovery)

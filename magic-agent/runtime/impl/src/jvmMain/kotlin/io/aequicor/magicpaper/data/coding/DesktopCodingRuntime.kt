@@ -30,6 +30,7 @@ class DesktopCodingRuntime(
     private val recordSkillRun: suspend (CodingSkillRunRecord) -> Unit = {},
     private val runObserver: CodingRunObserver = CodingRunObserver { _, events, _ -> events },
     private val workspaceRootPath: String = engines.first().runtime.rootPath,
+    private val selections: EngineExecutableSelections? = null,
 ) : CodingRuntime {
     private val byEngine = engines.associateBy { it.descriptor.engine }.also {
         require(it.isNotEmpty() && it.size == engines.size) { "Native engine registrations must be unique and non-empty" }
@@ -56,6 +57,8 @@ class DesktopCodingRuntime(
             field = value
             engines.forEach { it.runtime.globalFeatureFlags = value }
         }
+
+    override fun configureEngineExecutables(paths: Map<CodingEngine, String>) { selections?.update(paths) }
 
     // Optimization 1 (AGENT_SPEED_BOOST): in-memory cache for skill selection.
     // Key: projectId. Value: Pair(lastModifiedApprox, cached selection).

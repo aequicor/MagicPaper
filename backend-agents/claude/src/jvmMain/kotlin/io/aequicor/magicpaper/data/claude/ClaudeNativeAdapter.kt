@@ -9,7 +9,8 @@ class ClaudeNativeAdapter {
     val descriptor = BackendAgentDescriptor(
         CodingEngine.CLAUDE_CODE,
         "Claude Code",
-        setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_MODEL_CATALOG, BackendAgentCapability.NATIVE_SIGN_IN),
+        setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_MODEL_CATALOG, BackendAgentCapability.NATIVE_SIGN_IN,
+            BackendAgentCapability.EXECUTABLE_SELECTION),
         "Claude Code · работа с файлами и командами проекта",
         "Подключения Anthropic: ключ API или собственный вход Claude Code.",
         "Навыки и плагины Claude Code определяются его конфигурацией при запуске; список ниже относится к пакетам MagicPaper.",

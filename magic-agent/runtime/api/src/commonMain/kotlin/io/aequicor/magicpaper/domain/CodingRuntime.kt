@@ -29,6 +29,12 @@ interface CodingRuntime : ChatBackend {
     val computerUse: ComputerUse? get() = null
 
     /**
+     * Выбранные в настройках пути к исполняемым файлам движков ([AppSettings.engineExecutables]).
+     * Применяются при запуске и при сохранении настроек; идущие прогоны не прерываются.
+     */
+    fun configureEngineExecutables(paths: Map<CodingEngine, String>) = Unit
+
+    /**
      * Источники нативных каталогов моделей по движкам, у которых такая возможность объявлена.
      * Пусто там, где движка нет (веб, Android): каталог тогда работает только по кэшу.
      */

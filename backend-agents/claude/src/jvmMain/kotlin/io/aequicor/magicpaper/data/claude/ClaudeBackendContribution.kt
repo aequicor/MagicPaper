@@ -22,7 +22,7 @@ internal class ClaudeBackendAgent(
 ) : NativeAgentAdapter {
     private val executable = ClaudeExecutable(environment.commandOverride, report = { failure ->
         environment.diagnostics.error("coding.claude", "version_probe_failed", failure, emptyMap())
-    })
+    }, selected = environment.commandSelection)
     private val root = File(environment.home)
     private val running = ConcurrentHashMap<String, ClaudeProcessExecution>()
     private val lifecycleLock = Any()

@@ -458,6 +458,7 @@ class DefaultCodingService(
             }
         }
         codingRuntime?.globalFeatureFlags = settings.featureFlags
+        codingRuntime?.configureEngineExecutables(settings.engineExecutables)
         knownImmunitySignals = planningChat?.organisms?.store?.organisms?.value?.values.orEmpty().flatMap { it.signals }.map { it.id }.toSet()
         observeRuntime()
         refreshCodingEngines()
@@ -2575,8 +2576,15 @@ class DefaultCodingService(
 
     override suspend fun applySettings(settings: AppSettings): Result<Unit> = settingsApplyLock.withLock {
         val result = planningChat?.organisms?.applySettingsLimits(settings) ?: Result.success(Unit)
-        if (result.isSuccess) codingRuntime?.computerUse?.configure(settings.computerAccess, settings.applicationAccess)
+        if (result.isSuccess) {
+            codingRuntime?.computerUse?.configure(settings.computerAccess, settings.applicationAccess)
+            codingRuntime?.configureEngineExecutables(settings.engineExecutables)
+        }
         result
+    }
+
+    override fun setEngineExecutables(paths: Map<CodingEngine, String>) {
+        codingRuntime?.configureEngineExecutables(paths)
     }
 
     private class SettingsRuntimeUnconfirmed : IllegalStateException(

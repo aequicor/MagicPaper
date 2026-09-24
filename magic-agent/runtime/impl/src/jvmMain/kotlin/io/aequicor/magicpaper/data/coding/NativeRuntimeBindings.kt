@@ -12,6 +12,16 @@ import kotlinx.serialization.json.*
 /** A selected instance and its declared metadata, constructed by the installed catalog. */
 data class NativeRuntimeBinding(val descriptor: BackendAgentDescriptor, val runtime: CodingRuntime)
 
+/**
+ * Executables a person selected in the engine settings. Lookups read it per call, so a fresh choice
+ * applies to the next status check and run without recreating the adapters; running processes keep their binary.
+ */
+class EngineExecutableSelections {
+    @Volatile private var paths: Map<CodingEngine, String> = emptyMap()
+    fun path(engine: CodingEngine): String? = paths[engine]?.takeIf { it.isNotBlank() }
+    fun update(paths: Map<CodingEngine, String>) { this.paths = paths }
+}
+
 internal val nativeResources = NativeResources { path -> GenericNativeRuntime::class.java.getResource(path)?.let(::readCodingResource) }
 internal val nativeDiagnostics = object : NativeDiagnostics {
     override fun error(component: String, event: String, cause: Throwable, fields: Map<String, String>) = AppLog.error(component, event, cause, fields)
@@ -39,6 +49,7 @@ internal class NativeHostEnvironment(
     private val cachedProfile: (LlmProfile) -> LlmProfile = { it },
     private val rootOverride: File? = null,
     private val commandOverride: String? = null,
+    private val selections: EngineExecutableSelections? = null,
 ) {
     private val registries = mutableMapOf<CodingEngine, RuntimeQuestionnaireService>()
     private fun environment(descriptor: BackendAgentDescriptor, paths: NativeBackendPaths): NativeBackendEnvironment {
@@ -49,7 +60,7 @@ internal class NativeHostEnvironment(
         val registry = questionnaires.create("${paths.questionnaireScope}:${questionnaireDirectory.absolutePath}",
             FileRuntimeQuestionnaireStore(questionnaireDirectory))
         registries[descriptor.engine] = registry
-        return NativeBackendEnvironment(json, root.absolutePath, commandOverride, nativeResources,
+        return NativeBackendEnvironment(json, root.absolutePath, commandOverride, { selections?.path(descriptor.engine) }, nativeResources,
             OwnedCodingProcess(File(root, paths.processes)), cachedToken, refreshedToken, registry.asNativeQuestionnaires(),
             nativeDiagnostics, nativePresentation, library, NativeLifecycleJournalAdapter(journal, root.absolutePath))
     }

@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.data.coding.DesktopExecutablePicker
 import io.aequicor.magicpaper.data.coding.DesktopProjectDirPicker
 import io.aequicor.magicpaper.data.computer.DesktopComputerUse
 import io.aequicor.magicpaper.data.planning.GitPlanningWorkspace
@@ -66,7 +67,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
                 else coding.projects.firstOrNull { it.id == boundId }
             })) },
         settingsContributions = { nativeSettingsContributions(NativeSettingsComponentFactory(get(), get(), computer.permissions,
-            DefaultSubscriptionAccountPresentation)) },
+            DefaultSubscriptionAccountPresentation, DesktopExecutablePicker())) },
         platformPlugins = listOf(skills.plugin),
         packageInstructions = skills.instructions,
         experiencePlugin = skills::experiencePlugin,

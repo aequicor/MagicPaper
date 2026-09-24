@@ -687,7 +687,7 @@ class DefaultSettingsService(
             val bundle = ProfileBundle(
                 exportedAt = Id.now(),
                 settings = configuration.settings().copy(computerAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF,
-                    applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF),
+                    applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF, engineExecutables = emptyMap()),
                 plugins = pluginPreferences.exportPreferences(),
                 sessions = sessions,
                 generatedAssets = exportMediaAssets(sessions, mediaStore),
@@ -732,7 +732,7 @@ class DefaultSettingsService(
             // Revoke before importing any other data, including a suspended/failed usage write.
             // Imported data cannot authorize this machine or retain an active lease.
             val importedSettings = bundle.settings.copy(computerAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF,
-                applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF)
+                applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF, engineExecutables = emptyMap())
             importMediaAssets(bundle, mediaStore)
             configuration.changeSettings(importedSettings).getOrThrow()
             usage.replace(bundle.usage)

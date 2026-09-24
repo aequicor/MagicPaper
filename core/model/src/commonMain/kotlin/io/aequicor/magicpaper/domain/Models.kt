@@ -116,6 +116,8 @@ data class AppSettings(
     /** Экспериментальные возможности, включённые глобально для всех сессий. */
     val featureFlags: FeatureFlagState = FeatureFlagState(),
     val media: MediaSettings = MediaSettings(),
+    /** Выбранные вручную пути к исполняемым файлам движков. Это машина человека, поэтому с профилем не переносятся. */
+    val engineExecutables: Map<CodingEngine, String> = emptyMap(),
     // ---- Легаси-поля «одной модели» -------------------------------------
     // Сохраняются для совместимости со старыми файлами настроек; при первом
     // запуске переносятся в профиль подключением (см. ProfileMigrator).

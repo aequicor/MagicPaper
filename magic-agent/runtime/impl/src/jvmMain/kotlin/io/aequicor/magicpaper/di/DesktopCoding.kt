@@ -78,6 +78,7 @@ fun createDesktopNativeRuntime(
     val library = createNativeProviderLibrary(File(home, "coding").absolutePath, nativeResources,
         OwnedCodingProcess(File(home, "coding/provider-processes")), nativeDiagnostics, NativeLifecycleJournalAdapter(journal, File(home, "coding/provider-processes").absolutePath))
     val owned = mutableListOf<AutoCloseable>(library)
+    val selections = EngineExecutableSelections()
     try {
         val subscription = CodexAppServerOpenAiSubscription(json, computerUse = computer, browser = browser, checks = checks,
             secretStore = secrets, questionnaireFactory = questionnaireFactory, sharedProviderLibrary = library, journal = journal)
@@ -85,12 +86,12 @@ fun createDesktopNativeRuntime(
         val bindings = NativeHostEnvironment(json, journal, home, library, computer, browser, checks, questionnaireFactory,
             NativeAuthTokens { subscription.cachedAccessToken() }, NativeAuthTokens { subscription.subscriptionAccessToken() },
             { check(subscription.account().signedIn) { "Войдите в ChatGPT в настройках движков" } },
-            subscription::withCachedContextWindow).createAll()
+            subscription::withCachedContextWindow, selections = selections).createAll()
         bindings.forEach { owned += AutoCloseable { it.closeNative() } }
         val agents = bindings.map { (it.runtime as GenericNativeRuntime).agent }
         val claude = agents.firstOrNull { it.completion?.provider == ProviderType.ANTHROPIC_SUBSCRIPTION }?.let(::ClaudeCodeSubscription)
         return DesktopNativeRuntime(DesktopCodingRuntime(bindings, computer, skillSelection, checks, recordSkillRun, runObserver,
-            workspaceRootPath = File(home, "coding").absolutePath),
+            workspaceRootPath = File(home, "coding").absolutePath, selections = selections),
             subscription, claude, engineModelLimits(), bindings.map { AutoCloseable { it.closeNative() } } + library, agents, library, checks)
     } catch (failure: Throwable) {
         owned.asReversed().forEach { resource -> try { resource.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) } }

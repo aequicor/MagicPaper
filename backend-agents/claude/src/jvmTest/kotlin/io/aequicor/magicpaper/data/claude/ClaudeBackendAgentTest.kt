@@ -24,7 +24,7 @@ class ClaudeBackendAgentTest {
         fun args() = home.resolve("args").readLines()
         fun agent(): NativeAgentAdapter = ClaudeBackendContribution().create(environment())
         private fun environment() = NativeBackendEnvironment(
-            Json, home.resolve("state").path, binary.path, NativeResources { error("No resource read") },
+            Json, home.resolve("state").path, binary.path, { null }, NativeResources { error("No resource read") },
             object : NativeProcessRecovery {
                 override fun record(id: String, process: Process, attachLifetime: Boolean) { recorded += id }
                 override fun clear(id: String) { cleared += id }

@@ -22,6 +22,7 @@ class NativeSettingsComponent(
     val subscription: SubscriptionAccountPresentation,
     private val input: SettingsInput,
     private val onOutput: (SettingsOutput) -> Unit,
+    private val executablePicker: ExecutablePicker? = null,
 ) : SettingsComponent, SettingsService by service {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     internal val engines = backendCatalog.descriptors
@@ -36,6 +37,25 @@ class NativeSettingsComponent(
     fun openComputerSettings() = onOutput(SettingsOutput.Computer)
     fun openModelsSettings() = onOutput(SettingsOutput.Models)
     fun prepareCodingRuntime(engine: CodingEngine) = coding.prepareCodingRuntime(engine)
+
+    /** The chosen path applies to the runtime at once and is persisted with the rest of the settings. */
+    fun selectEngineExecutable(engine: CodingEngine) {
+        val picker = executablePicker ?: return
+        scope.launch {
+            val path = picker.pickExecutable() ?: return@launch
+            applyEngineExecutables(state.value.settings.engineExecutables + (engine to path), engine)
+        }
+    }
+
+    fun clearEngineExecutable(engine: CodingEngine) {
+        applyEngineExecutables(state.value.settings.engineExecutables - engine, engine)
+    }
+
+    private fun applyEngineExecutables(paths: Map<CodingEngine, String>, engine: CodingEngine) {
+        coding.setEngineExecutables(paths)
+        saveSettings(state.value.settings.copy(engineExecutables = paths))
+        prepareCodingRuntime(engine)
+    }
     fun uninstallCodingRuntime(engine: CodingEngine) = coding.uninstallCodingRuntime(engine)
     fun recover(recovery: CodingRecovery) = coding.recover(recovery)
     fun cancelRecovery(recovery: CodingRecovery) = coding.cancelRecovery(recovery)
@@ -60,9 +80,10 @@ class NativeSettingsComponentFactory(
     private val coding: CodingService,
     private val permissions: ComputerPermissions,
     private val subscription: SubscriptionAccountPresentation,
+    private val executablePicker: ExecutablePicker? = null,
 ) : SettingsComponent.Factory {
     override fun create(context: ComponentContext, input: SettingsInput, onOutput: (SettingsOutput) -> Unit): SettingsComponent =
-        NativeSettingsComponent(context, service, coding, permissions, subscription, input, onOutput)
+        NativeSettingsComponent(context, service, coding, permissions, subscription, input, onOutput, executablePicker)
 }
 
 fun nativeSettingsContributions(factory: SettingsComponent.Factory): SettingsContributions = SettingsContributions(

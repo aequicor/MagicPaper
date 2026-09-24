@@ -19,7 +19,8 @@ class BackendAgentFactoryTest {
         val claude = catalog.descriptor(CodingEngine.CLAUDE_CODE)
         assertEquals("Claude Code", claude.adapterName)
         assertEquals(setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_MODEL_CATALOG,
-            BackendAgentCapability.NATIVE_SIGN_IN), claude.capabilities)
+            BackendAgentCapability.NATIVE_SIGN_IN, BackendAgentCapability.EXECUTABLE_SELECTION), claude.capabilities)
+        assertFalse(BackendAgentCapability.EXECUTABLE_SELECTION in codex.capabilities, "A selection the engine ignores must not be offered")
     }
 
     @Test fun onlyAnEngineWithItsOwnAccountOffersSubscriptionAccess() {

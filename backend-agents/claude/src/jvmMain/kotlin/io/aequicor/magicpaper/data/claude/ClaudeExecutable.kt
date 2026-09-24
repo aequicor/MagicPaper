@@ -20,20 +20,33 @@ internal class ClaudeExecutable(
     private val mac: Boolean = System.getProperty("os.name").orEmpty().startsWith("Mac", ignoreCase = true),
     /** The probe's failure is shown as a status; the owner of diagnostics records its cause. */
     private val report: (Throwable) -> Unit = {},
+    /** The executable the person selected in the engine settings; read per lookup, so a fresh choice applies at once. */
+    private val selected: () -> String? = { null },
 ) {
     /** An explicit path is authoritative: a wrong one is reported, never replaced by another installation. */
+    private fun explicit(): String? =
+        listOfNotNull(override, selected(), environment(OVERRIDE_VARIABLE)).firstOrNull { it.isNotBlank() }
+
     fun find(): File? {
-        val explicit = override?.takeIf { it.isNotBlank() } ?: environment(OVERRIDE_VARIABLE)?.takeIf { it.isNotBlank() }
-        if (explicit != null) return File(explicit).takeIf { it.isFile }
+        explicit()?.let { return File(it).takeIf { file -> file.isFile } }
         return candidates().firstOrNull { it.isFile && (windows || it.canExecute()) }
     }
 
     fun candidates(): List<File> {
-        val name = if (windows) "claude.exe" else "claude"
-        val onPath = environment("PATH").orEmpty().split(File.pathSeparatorChar).filter { it.isNotBlank() }.map { File(it, name) }
+        // Windows installs keep no single name: the native installer and WinGet link an .exe,
+        // while npm's global prefix holds .cmd/.bat shims alone.
+        val names = if (windows) listOf("claude.exe", "claude.cmd", "claude.bat") else listOf("claude")
+        val onPath = environment("PATH").orEmpty().split(File.pathSeparatorChar).filter { it.isNotBlank() }
+            .flatMap { directory -> names.map { File(directory, it) } }
         val known = buildList {
-            add(File(home, ".local/bin/$name")); add(File(home, ".claude/local/$name")); add(File(home, ".bun/bin/$name"))
-            if (!windows) { add(File("/opt/homebrew/bin/$name")); add(File("/usr/local/bin/$name")); add(File(home, ".npm-global/bin/$name")) }
+            addAll(names.map { File(home, ".local/bin/$it") }); addAll(names.map { File(home, ".claude/local/$it") })
+            addAll(names.map { File(home, ".bun/bin/$it") })
+            if (windows) {
+                // A GUI process often predates the installer's PATH edit, so the vendor prefixes are searched directly.
+                val roots = listOfNotNull(environment("APPDATA"), environment("LOCALAPPDATA")).distinct()
+                roots.forEach { root -> addAll(names.map { File(root, "npm/$it") }) }
+                environment("LOCALAPPDATA")?.let { root -> addAll(names.map { File(root, "Microsoft/WinGet/Links/$it") }) }
+            } else { add(File("/opt/homebrew/bin/claude")); add(File("/usr/local/bin/claude")); add(File(home, ".npm-global/bin/claude")) }
         }
         return onPath + known + desktopBundled()
     }
@@ -54,8 +67,9 @@ internal class ClaudeExecutable(
 
     suspend fun status(): NativeInstallationStatus = withContext(Dispatchers.IO) {
         val file = find() ?: return@withContext NativeInstallationStatus(NativeInstallationPhase.ERROR,
-            if (override != null || environment(OVERRIDE_VARIABLE) != null) "Указанный путь к Claude Code недоступен."
-            else "Claude Code не найден. Установите его (claude.com/claude-code) или задайте MAGICPAPER_CLAUDE_PATH.")
+            if (explicit() != null) "Указанный путь к Claude Code недоступен."
+            else "Claude Code не найден. Установите его (claude.com/claude-code), задайте MAGICPAPER_CLAUDE_PATH " +
+                "или выберите приложение кнопкой «Выбрать приложение».")
         val version = try { version(file) } catch (failure: java.io.IOException) { report(failure); null }
         if (version == null) return@withContext NativeInstallationStatus(NativeInstallationPhase.ERROR, "Claude Code не отвечает на проверку версии: ${file.path}")
         val signedIn = try { signedIn(file) } catch (failure: java.io.IOException) { report(failure); null }
