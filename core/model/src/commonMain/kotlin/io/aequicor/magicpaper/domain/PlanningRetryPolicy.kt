@@ -8,8 +8,13 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 
-class LlmTransportException(val statusCode: Int, val retryAfter: String?, detail: String) :
-    IllegalStateException("HTTP $statusCode: $detail" + retryAfter?.let { "\nRetry-After: $it" }.orEmpty()) {
+class LlmTransportException(
+    val statusCode: Int,
+    val retryAfter: String?,
+    detail: String,
+    /** Машинные поля отказа из тела ошибки; null — провайдер не прислал разбираемый отказ. */
+    val rejection: ProviderRejection? = null,
+) : IllegalStateException("HTTP $statusCode: $detail" + retryAfter?.let { "\nRetry-After: $it" }.orEmpty()) {
     /**
      * Провайдер получил запрос и ответил отказом: ответа модели не существует, поэтому повтор
      * не удваивает внешний эффект. `408` и `5xx` означают потерянный ответ — их исход остаётся

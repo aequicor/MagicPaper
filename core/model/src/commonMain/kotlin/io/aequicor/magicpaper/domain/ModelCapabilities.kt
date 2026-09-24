@@ -39,6 +39,14 @@ data class ModelCapabilities(
     companion object {
 
         /**
+         * Диалекты переключателей мышления: те же строки pi получает в `compat.thinkingFormat`.
+         * Названы здесь, чтобы формат не разъехался между транспортом приложения и кодинг-агентом.
+         */
+        const val THINKING_QWEN = "qwen"
+        const val THINKING_QWEN_CHAT_TEMPLATE = "qwen-chat-template"
+        const val THINKING_ZAI = "zai"
+
+        /**
          * Вычислить capabilities по провайдеру, идентификатору модели и (опционально)
          * base URL. Одна точка входа — все потребители вызывают [resolve].
          *
@@ -138,10 +146,10 @@ data class ModelCapabilities(
          * - Остальным — `null` (pi выберет `reasoning_effort` самостоятельно)
          */
         private fun resolveThinkingFormat(family: String, baseUrl: String): String? = when {
-            family == "glm" && isZaiEndpoint(baseUrl) -> "zai"
+            family == "glm" && isZaiEndpoint(baseUrl) -> THINKING_ZAI
             family != "qwen" -> null
-            isLocalEndpoint(baseUrl) -> "qwen-chat-template"
-            else -> "qwen"
+            isLocalEndpoint(baseUrl) -> THINKING_QWEN_CHAT_TEMPLATE
+            else -> THINKING_QWEN
         }
 
         // ---- Compat flags -------------------------------------------------------------

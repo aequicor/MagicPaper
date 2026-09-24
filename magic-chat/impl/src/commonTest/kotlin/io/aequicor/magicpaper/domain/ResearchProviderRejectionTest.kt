@@ -15,10 +15,23 @@ import kotlin.test.*
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ResearchProviderRejectionTest {
-    @Test fun aConfirmedProviderRejectionStopsTheRequestAsAModelFailure() = rejectedRequest(429, known = true)
-    @Test fun aLostProviderAnswerStillStopsTheRequestAsAnUnknownOutcome() = rejectedRequest(503, known = false)
+    @Test fun aRateLimitedProviderIsReportedAsAModelFailureWithRetryAdvice() =
+        rejectedRequest(429, known = true, reason = "ограничил число запросов")
 
-    private fun rejectedRequest(status: Int, known: Boolean) = runTest {
+    /** Имя отвергнутого параметра — единственное, по чему человек может исправить настройку модели. */
+    @Test fun aRejectedRequestParameterIsNamedSoTheSettingCanBeFixed() = rejectedRequest(400, known = true,
+        reason = "reasoning_effort", rejection = ProviderRejection(code = "unsupported_parameter", param = "reasoning_effort",
+            refusal = ProviderRefusal.PARAMETER))
+
+    /** Переполнение контекста — не «проверьте подключение»: действие человека другое. */
+    @Test fun anOversizedRequestIsReportedAsAContextLimit() = rejectedRequest(400, known = true,
+        reason = "не помещается в контекст", rejection = ProviderRejection(code = "InvalidParameter",
+            refusal = ProviderRefusal.CONTEXT_LENGTH))
+
+    @Test fun aLostProviderAnswerStillStopsTheRequestAsAnUnknownOutcome() =
+        rejectedRequest(503, known = false, reason = "не подтверждён")
+
+    private fun rejectedRequest(status: Int, known: Boolean, reason: String, rejection: ProviderRejection? = null) = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val values = InMemoryKeyValueStore()
         val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
@@ -46,7 +59,7 @@ class ResearchProviderRejectionTest {
             override suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
                 exchanges: List<LlmToolExchange>): LlmToolTurn {
                 calls++
-                throw LlmTransportException(status, null, "private provider body")
+                throw LlmTransportException(status, null, "private provider body", rejection)
             }
         }
         val receipts = MemoryToolReceiptStore()
@@ -67,6 +80,7 @@ class ResearchProviderRejectionTest {
             assertEquals(if (known) ChatMachine.Failure.MODEL else ChatMachine.Failure.UNKNOWN_OUTCOME, run.failure)
             val notice = checkNotNull(chat.state.value.notice)
             assertContains(notice, RESEARCH_MODEL_FAILURE)
+            assertContains(notice, reason)
             assertFalse("private provider body" in notice, notice)
             val stored = checkNotNull(checkpoints.session("chat"))
             assertFalse("private provider body" in json.encodeToString(ChatSession.serializer(), stored))
@@ -76,9 +90,9 @@ class ResearchProviderRejectionTest {
             assertEquals("model", reported.fields["phase"], reported.line())
             assertEquals(status.toString(), reported.fields["status"], reported.line())
             assertEquals("ProviderToolRunFailure", reported.fields["causeType"], reported.line())
+            assertEquals(rejection?.param, reported.fields["param"], reported.line())
             assertFalse("private provider body" in reported.line(), reported.line())
             if (known) {
-                assertContains(notice, "повторите запрос")
                 // Подтверждённый отказ не требует восстановления: тот же вопрос можно задать снова.
                 chat.discardPendingRequest(); advanceUntilIdle()
                 chat.send("Новый вопрос после проверки подключения"); advanceUntilIdle()

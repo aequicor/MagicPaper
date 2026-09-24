@@ -318,5 +318,5 @@ internal fun providerOutcomeUnknown(failure: Exception): Boolean = when {
 internal fun diagnosticFields(failure: Throwable, runId: String = ""): Map<String, String> = buildMap {
     if (runId.isNotBlank()) put("runId", runId)
     put("causeType", failure::class.simpleName.orEmpty())
-    failure.transportRejection()?.let { put("status", it.statusCode.toString()) }
+    failure.transportRejection()?.let { putAll(it.logFields()) }
 }

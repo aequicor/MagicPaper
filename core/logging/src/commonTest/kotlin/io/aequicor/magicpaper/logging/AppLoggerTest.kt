@@ -94,12 +94,14 @@ class AppLoggerTest {
     @Test fun runAndCallIdentifiersStayInTheRecordAsOpaqueIds() {
         val log = AppLogger(sink = AppLogSink {})
         log.error("provider_tools", "run_failed", mapOf("runId" to "chat:private-session:private-request",
-            "callId" to "project/owner/request/call", "status" to "429", "causeType" to "LlmTransportException"))
+            "callId" to "project/owner/request/call", "status" to "429", "causeType" to "LlmTransportException",
+            "code" to "unsupported_parameter", "param" to "reasoning_effort"))
         val entry = log.history().single()
-        assertEquals(setOf("runId", "callId", "status", "causeType"), entry.fields.keys, entry.line())
+        assertEquals(setOf("runId", "callId", "status", "causeType", "code", "param"), entry.fields.keys, entry.line())
         assertTrue(entry.fields.getValue("runId").startsWith("id-"), entry.line())
         assertTrue(entry.fields.getValue("callId").startsWith("id-"), entry.line())
         assertEquals("429", entry.fields["status"])
+        assertEquals("reasoning_effort", entry.fields["param"])
         listOf("private-session", "private-request", "project/owner").forEach { assertFalse(it in entry.line(), it) }
     }
 

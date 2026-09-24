@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.llm
 
+import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
@@ -8,6 +9,9 @@ import io.aequicor.magicpaper.domain.LlmToolExchange
 import io.aequicor.magicpaper.domain.LlmToolTurn
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.LlmTransportException
+import io.aequicor.magicpaper.logging.AppLog
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.timeout
@@ -48,7 +52,8 @@ internal suspend fun HttpClient.postJson(
     val text = response.bodyAsText()
     usageProvider?.let { UsageParsing.report(text, it, kotlinx.serialization.json.Json) }
     if (!response.status.isSuccess()) {
-        throw LlmTransportException(response.status.value, response.headers["Retry-After"], text.take(300).ifBlank { "пустой ответ" })
+        throw LlmTransportException(response.status.value, response.headers["Retry-After"],
+            text.take(300).ifBlank { "пустой ответ" }, providerRejection(text))
     }
     return text
     }
@@ -75,9 +80,11 @@ class OpenAiCompatibleGateway(
     private val client: HttpClient,
     private val json: Json,
 ) : LlmGateway {
+    /** Эндпоинты, которые сами отвергли параметр усилия: повторно отправлять заведомо отклоняемый запрос нечего. */
+    private val effortRefused = MutableStateFlow<Set<String>>(emptySet())
 
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String =
-        parseResponse(request(profile, LlmPayloads.openAi(profile, messages, ModelDefaults.capability(profile))))
+        parseResponse(send(profile) { LlmPayloads.openAi(it, messages, ModelDefaults.capability(it)) })
 
     override suspend fun turn(
         profile: LlmProfile,
@@ -85,10 +92,44 @@ class OpenAiCompatibleGateway(
         tools: List<LlmToolDefinition>,
         exchanges: List<LlmToolExchange>,
     ): LlmToolTurn {
-        val base = LlmPayloads.openAi(profile, messages, ModelDefaults.capability(profile))
-        val payload = LlmToolWire.openAiPayload(base, tools, exchanges, profile.provider, json)
-        return LlmToolWire.openAiResponse(request(profile, payload), profile.provider, json)
+        val body = send(profile) {
+            LlmToolWire.openAiPayload(LlmPayloads.openAi(it, messages, ModelDefaults.capability(it)), tools, exchanges, it.provider, json)
+        }
+        return LlmToolWire.openAiResponse(body, profile.provider, json)
     }
+
+    /**
+     * Запрос с одним откатом к настройке, которую провайдер отверг сам.
+     *
+     * Уровень усилия — необязательная ручка: если сервер вернул 400 и назвал её в `param`,
+     * запрос не был обработан, поэтому повтор без неё не удваивает расход и не теряет ответ.
+     * Любой другой отказ остаётся ошибкой: догадываться о договоре провайдера транспорт не
+     * должен. Отвергнутый параметр запоминается, чтобы каждое следующее сообщение не платило
+     * за тот же отказ. Откат пишется в журнал на INFO: он случается не чаще раза на
+     * эндпоинт и модель и меняет то, что получает человек, — прятать это в DEBUG нельзя.
+     */
+    private suspend fun send(profile: LlmProfile, payload: (LlmProfile) -> JsonObject): String {
+        val effective = if (refusesEffort(profile)) profile.withoutEffort() else profile
+        return try { request(effective, payload(effective)) }
+        catch (failure: LlmTransportException) {
+            if (!refusedEffort(failure) || effective.effort == EffortSelection.Default) throw failure
+            AppLog.info("llm", "effort_parameter_refused", mapOf("provider" to profile.provider.name,
+                "model" to profile.modelId, "param" to EFFORT_PARAMETER, "result" to "resent_without_effort"))
+            effortRefused.update { it + effortKey(profile) }
+            val fallback = profile.withoutEffort()
+            request(fallback, payload(fallback))
+        }
+    }
+
+    private fun refusesEffort(profile: LlmProfile) =
+        profile.effort != EffortSelection.Default && effortKey(profile) in effortRefused.value
+
+    private fun refusedEffort(failure: LlmTransportException) =
+        failure.statusCode == 400 && failure.rejection?.param == EFFORT_PARAMETER
+
+    private fun effortKey(profile: LlmProfile) = listOf(profile.provider.name, profile.baseUrl, profile.modelId).joinToString("|")
+
+    private fun LlmProfile.withoutEffort() = copy(effort = EffortSelection.Default)
 
     private suspend fun request(profile: LlmProfile, payload: JsonObject): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
@@ -121,4 +162,6 @@ class OpenAiCompatibleGateway(
             ?: (message["reasoning_content"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
             ?: error("Empty LLM response")
     }.getOrElse { error("Ошибка ответа модели: ${it.message}") }
+
+    private companion object { const val EFFORT_PARAMETER = "reasoning_effort" }
 }

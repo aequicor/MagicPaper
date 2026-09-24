@@ -743,10 +743,9 @@ class DefaultChatService(
                 if (recorder.draft(false).failedMessage == null)
                     recorder.apply(CodingEvent.Failed(if (modelReplyFailed) RESEARCH_MODEL_FAILURE else "Не удалось завершить исследование"))
                 AppLog.error("chat", "send.failed", operationFields + mapOf("phase" to if (modelReplyFailed) "model" else "research",
-                    "causeType" to failure::class.simpleName.orEmpty()) +
-                    (rejection?.let { mapOf("status" to it.statusCode.toString()) } ?: emptyMap()))
+                    "causeType" to failure::class.simpleName.orEmpty()) + (rejection?.logFields() ?: emptyMap()))
                 _state.update { it.copy(notice = when {
-                    rejection?.confirmedRejection == true -> "$RESEARCH_MODEL_FAILURE. Проверьте подключение к модели и повторите запрос."
+                    rejection?.confirmedRejection == true -> "$RESEARCH_MODEL_FAILURE. ${rejection.safeReason()}"
                     rejection != null -> "$RESEARCH_MODEL_FAILURE. Исход обращения не подтверждён. Можно проверить сохранённый ответ или оставить запрос без продолжения."
                     modelReplyFailed -> "$RESEARCH_MODEL_FAILURE. Проверьте подключение к модели. Можно проверить сохранённый ответ или оставить запрос без продолжения."
                     else -> "Не удалось завершить запрос. Можно проверить сохранённый ответ или оставить запрос без продолжения."

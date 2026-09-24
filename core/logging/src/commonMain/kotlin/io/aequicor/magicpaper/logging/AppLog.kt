@@ -189,8 +189,10 @@ private fun isNumericKey(key: String): Boolean =
  * `causeType` is the simple class name of the cause a caller without an exception in hand reports; it is not free text.
  * `executable` is the file name of an external program a check ran, never its directory or arguments.
  * `commit` is a Git object id, never a branch name or a message.
+ * `code`/`param` are a provider's own machine tokens for a rejected request (`unsupported_parameter`,
+ * `reasoning_effort`), never its free-text message.
  */
-private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure", "causeType", "executable", "commit")
+private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure", "causeType", "executable", "commit", "code", "param")
 private val machineCode by lazy { Regex("[A-Za-z0-9_./:+-]{1,160}") }
 private val eventCode by lazy { Regex("[A-Za-z][A-Za-z0-9_.-]{0,79}") }
 

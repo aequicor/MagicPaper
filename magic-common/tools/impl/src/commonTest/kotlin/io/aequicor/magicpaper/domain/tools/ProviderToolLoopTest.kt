@@ -106,7 +106,8 @@ class ProviderToolLoopTest {
         )) {
             val journal = InMemoryEventJournal()
             var calls = 0
-            val rejection = LlmTransportException(status, null, "private provider body")
+            val rejection = LlmTransportException(status, null, "private provider body",
+                ProviderRejection(code = "unsupported_parameter", param = "reasoning_effort"))
             val loop = testLoop(gateway { calls++; throw rejection }, journal)
             val thrown = assertFailsWith<IllegalStateException> { loop.run("run-$status", profile, messages, session { error("unused") }) }
             assertEquals(1, calls, "HTTP $status")
@@ -118,6 +119,8 @@ class ProviderToolLoopTest {
             val record = AppLog.history().last { it.component == "provider_tools" && it.event == "run_failed" }
             assertEquals(rejection::class.simpleName, record.fields["causeType"], record.line())
             assertEquals(status.toString(), record.fields["status"], record.line())
+            assertEquals("unsupported_parameter", record.fields["code"], record.line())
+            assertEquals("reasoning_effort", record.fields["param"], record.line())
             assertEquals(if (phase == ProviderToolMachine.Phase.UNKNOWN) "unknown" else "failed", record.fields["outcome"], record.line())
             assertTrue(record.fields.getValue("runId").startsWith("id-"), record.line())
             assertFalse("private provider body" in record.line(), record.line())
