@@ -61,8 +61,8 @@ class NativeCheckReceiptTest {
         assertFails { readNativeCheckCleanup(receipt, root) }
     }
     @Test fun managedContainmentDoesNotApplyProtectedWorkspaceFileOrNetworkPolicy() {
-        val mac = MacResearchSandbox.profile(null)
-        assertContains(mac, "SYS_setpgid SYS_setsid SYS_posix_spawn")
+        val mac = MacResearchSandbox.profile(null, SeatbeltMembership())
+        assertContains(mac, "SYS_setpgid SYS_setsid")
         assertFalse(mac.contains("deny file-write")); assertFalse(mac.contains("network-outbound"))
         val linux = LinuxResearchSandbox.arguments(null, Path.of("/workspace"))
         assertContains(linux, "--unshare-pid"); assertContains(linux, "--as-pid-1"); assertContains(linux, "--disable-userns")

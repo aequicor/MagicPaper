@@ -22,13 +22,18 @@ internal interface ResearchSandbox {
 
     /**
      * A managed-worktree command the user allowed to start programs the containment otherwise refuses. Only a
-     * sandbox that restricts starting programs differs from [prepare] without a filesystem policy.
+     * sandbox that restricts starting programs differs from [prepare] without a filesystem policy; none does now,
+     * so the grant is kept in reserve for one that would.
      */
     fun prepareSpawning(command: List<String>, cwd: Path, environment: Map<String, String>,
         receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess =
         prepare(command, cwd, environment, null, receiptId, receiptDirectory, authorityRecorder)
 
-    /** Whether a failed command's [output] shows this sandbox refused to start a program; a grant would change it. */
+    /**
+     * Whether a failed command's [output] shows this sandbox refused to start a program; a grant would change it.
+     * A sandbox that never refuses must keep this false: a failing build's own "Operation not permitted" would
+     * otherwise ask the user about a refusal that did not happen.
+     */
     fun spawnRefused(output: String): Boolean = false
 
     companion object {
@@ -46,22 +51,22 @@ internal object MacResearchSandbox : ResearchSandbox {
         receiptId: String, receiptDirectory: Path, standardOutput: Path,
         authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess {
         if (!File("/usr/bin/sandbox-exec").canExecute()) throw NativeCheckUnavailable("Seatbelt недоступен")
-        return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(policy), "--"),
-            cwd, environment, receiptId, receiptDirectory, standardOutput)
+        val membership = SeatbeltMembership()
+        return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(policy, membership), "--"),
+            cwd, environment, receiptId, receiptDirectory, standardOutput, membership)
     }
     /**
-     * [spawnGranted] lifts only the `posix_spawn` refusal, for a command the user allowed: Python's framework launcher,
-     * `xargs` in `gradlew` and the Java launcher all start programs through it and fail without it.
+     * Program start stays allowed: Python's framework launcher, `xargs` in `gradlew` and the Java launcher all use
+     * `posix_spawn`. Its group and session attributes can still move a descendant out of the host-owned group, so
+     * the stop proof also follows [membership], which no descendant can leave.
      */
-    fun profile(policy: ResearchWorkspacePolicy?, spawnGranted: Boolean = false): String {
+    fun profile(policy: ResearchWorkspacePolicy?, membership: SeatbeltMembership): String {
         fun quoted(path: Path) = "\"" + path.toString().replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-        require(!spawnGranted || policy == null) { "Запуск программ разрешается только в рабочей копии задачи" }
         return buildString {
             appendLine("(version 1)\n(allow default)")
-            // Keep every descendant in the host-owned group, including raw syscall callers.
-            // posix_spawn has group/session attributes that bypass setpgid/setsid syscalls.
-            if (spawnGranted) appendLine("(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid))")
-            else appendLine("(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid SYS_posix_spawn))")
+            // Keep ordinary descendants in the host-owned group, including raw syscall callers.
+            appendLine("(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid))")
+            appendLine(membership.rule)
             appendLine("(deny signal)\n(allow signal (target self) (target children))")
             if (policy == null) return@buildString // Managed worktrees retain ordinary file and network access.
             appendLine("(deny file-write*)")
@@ -76,21 +81,10 @@ internal object MacResearchSandbox : ResearchSandbox {
     override fun prepare(command: List<String>, cwd: Path, environment: Map<String, String>, policy: ResearchWorkspacePolicy?,
         receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess {
         if (!File("/usr/bin/sandbox-exec").canExecute()) throw NativeCheckUnavailable("Seatbelt недоступен")
-        return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(policy), "--"),
-            cwd, environment, receiptId, receiptDirectory)
+        val membership = SeatbeltMembership()
+        return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(policy, membership), "--"),
+            cwd, environment, receiptId, receiptDirectory, membership = membership)
     }
-    override fun prepareSpawning(command: List<String>, cwd: Path, environment: Map<String, String>,
-        receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess {
-        if (!File("/usr/bin/sandbox-exec").canExecute()) throw NativeCheckUnavailable("Seatbelt недоступен")
-        return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(null, spawnGranted = true), "--"),
-            cwd, environment, receiptId, receiptDirectory)
-    }
-    /**
-     * Seatbelt's refusal has no exit code of its own. A refused `posix_spawn` reads as EPERM ("Operation not
-     * permitted", from `xargs` or the Java launcher) or, from Python's launcher, as a `posix_spawn:` line.
-     */
-    override fun spawnRefused(output: String): Boolean =
-        "Operation not permitted" in output || Regex("(?m)\\bposix_spawn\\b[^\\n]*:").containsMatchIn(output)
 }
 
 internal object LinuxResearchSandbox : ResearchSandbox {

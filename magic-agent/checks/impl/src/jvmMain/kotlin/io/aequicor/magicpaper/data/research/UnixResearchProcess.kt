@@ -24,6 +24,8 @@ internal class UnixResearchProcess private constructor(
     private val childPid: Int, private val readFd: Int, private var gateFd: Int,
     private val permit: String, private val guardian: Process, private val namespace: LinuxNamespace?,
     override val receipt: CheckProcessReceipt, private val files: NativeCheckReceiptFiles,
+    /** Seatbelt's descendants that may have left the group through `posix_spawn` attributes; null elsewhere. */
+    private val membership: SeatbeltMembership?,
 ) : PreparedCheckProcess() {
     private val completion = CompletableFuture<Int>()
     private val lifetime = Any()
@@ -46,8 +48,8 @@ internal class UnixResearchProcess private constructor(
                 while (result < 0 && Native.getLastError() == 4)
                 check(result == 0) { "Cannot observe check process termination" }
             } }
-            attempt { synchronized(lifetime) { signalGroup(9); namespace?.terminate() } }
-            attempt { awaitNoWriters(childPid, namespace) }
+            attempt { synchronized(lifetime) { signalGroup(9); signalMembers(membership, 9); namespace?.terminate() } }
+            attempt { awaitNoWriters(childPid, namespace, membership) }
             // Stop the guardian while the leader is still unreaped, so it can never signal a reused group ID.
             attempt {
                 guardian.outputStream.use { it.write("done\n".encodeToByteArray()); it.flush() }
@@ -110,8 +112,10 @@ internal class UnixResearchProcess private constructor(
     override fun onExit(): CompletableFuture<Process> = completion.handle { _, _ -> this }
     override fun pid() = childPid.toLong()
     override fun toHandle(): ProcessHandle = ProcessHandle.of(pid()).orElseThrow { IllegalStateException("Process exited") }
-    override fun destroy() { synchronized(lifetime) { signalGroup(15); namespace?.terminate() } }
-    override fun destroyForcibly(): Process { synchronized(lifetime) { signalGroup(9); namespace?.terminate() }; return this }
+    override fun destroy() { synchronized(lifetime) { signalGroup(15); signalMembers(membership, 15); namespace?.terminate() } }
+    override fun destroyForcibly(): Process {
+        synchronized(lifetime) { signalGroup(9); signalMembers(membership, 9); namespace?.terminate() }; return this
+    }
 
     companion object {
         private val libc by lazy { NativeLibrary.getInstance("c") }
@@ -120,7 +124,8 @@ internal class UnixResearchProcess private constructor(
         private fun startedAt(pid: Long): Long = ProcessHandle.of(pid).orElseThrow().info().startInstant().orElseThrow().toEpochMilli()
 
         fun prepare(command: List<String>, containment: List<String>, cwd: Path, environment: Map<String, String>,
-            receiptId: String, receiptDirectory: Path, standardOutput: Path? = null): PreparedCheckProcess {
+            receiptId: String, receiptDirectory: Path, standardOutput: Path? = null,
+            membership: SeatbeltMembership? = null): PreparedCheckProcess {
             require(command.isNotEmpty() && command.none { '\u0000' in it })
             val permit = UUID.randomUUID().toString()
             // The handshake stays on the pipe. Only after durable release does stdout switch to
@@ -165,7 +170,7 @@ internal class UnixResearchProcess private constructor(
                 val files = NativeCheckReceiptFiles(receiptDirectory, receiptId)
                 files.record(NativeCheckIdentity(receipt, startedAt(pid.toLong()), namespace?.identity ?: "pgrp:$pid",
                     guardian.pid(), startedAt(guardian.pid())))
-                val process = UnixResearchProcess(pid, output[0], input[1], permit, guardian, namespace, receipt, files)
+                val process = UnixResearchProcess(pid, output[0], input[1], permit, guardian, namespace, receipt, files, membership)
                 handedProcess = process
                 handedOff = true
                 return process
@@ -175,8 +180,9 @@ internal class UnixResearchProcess private constructor(
                 fun cleanup(block: () -> Unit) { try { block() } catch (failure: Throwable) { error.addSuppressed(failure) } }
                 if (pid > 0) {
                     cleanup { val killed = libc.getFunction("kill").invokeInt(arrayOf(-pid, 9)); check(killed == 0 || Native.getLastError() == 3) }
+                    cleanup { signalMembers(membership, 9) }
                     cleanup { namespace?.terminate() }
-                    cleanup { awaitNoWriters(pid, namespace) }
+                    cleanup { awaitNoWriters(pid, namespace, membership) }
                     cleanup { guardian?.let { it.outputStream.use { stream -> stream.write("done\n".encodeToByteArray()); stream.flush() }; check(it.waitFor(10, TimeUnit.SECONDS) && it.exitValue() == 0) } }
                     cleanup { check(libc.getFunction("waitpid").invokeInt(arrayOf(pid, IntByReference(), 0)) == pid) }
                 }
@@ -215,10 +221,22 @@ internal class UnixResearchProcess private constructor(
             }
         }
 
-        private fun awaitNoWriters(group: Int, namespace: LinuxNamespace?) {
+        /**
+         * Signals every live member of the check's Seatbelt profile, including one that left the group. A member is
+         * identified moments before its signal; reusing its PID in between would take a full wrap of the PID space.
+         */
+        private fun signalMembers(membership: SeatbeltMembership?, signal: Int): List<Int> =
+            membership?.members().orEmpty().onEach { pid ->
+                val result = libc.getFunction("kill").invokeInt(arrayOf(pid, signal))
+                check(result == 0 || Native.getLastError() == 3) { "Cannot stop owned check process (${Native.getLastError()})" }
+            }
+
+        private fun awaitNoWriters(group: Int, namespace: LinuxNamespace?, membership: SeatbeltMembership?) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
             while (true) {
-                val writers = if (mac) macGroupWriters(group) else requireNotNull(namespace) { "Missing PID namespace proof" }.writers()
+                // A member started just before the kill is signalled on the next pass rather than missed.
+                val writers = if (mac) macGroupWriters(group) + signalMembers(membership, 9)
+                    else requireNotNull(namespace) { "Missing PID namespace proof" }.writers()
                 if (writers.isEmpty()) return
                 check(System.nanoTime() < deadline) { "Owned check processes have not stopped" }
                 Thread.sleep(10)

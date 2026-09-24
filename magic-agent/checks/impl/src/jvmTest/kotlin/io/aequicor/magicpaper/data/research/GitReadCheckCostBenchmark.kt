@@ -110,7 +110,7 @@ class GitReadCheckCostBenchmark {
             report.appendLine("plain git rev-parse:        mean %.1f ms".format(plain.average() / 1e6))
             if (System.getProperty("os.name").startsWith("Mac")) {
                 val sandboxed = (1..10).map { timed { run(project, listOf("/usr/bin/sandbox-exec", "-p",
-                    MacResearchSandbox.profile(ResearchWorkspacePolicy.metadataOnly(project, Files.createTempDirectory("s"))), "--",
+                    MacResearchSandbox.profile(ResearchWorkspacePolicy.metadataOnly(project, Files.createTempDirectory("s")), SeatbeltMembership()), "--",
                     "git", "rev-parse", "--is-inside-work-tree")) } }
                 report.appendLine("sandbox-exec git rev-parse: mean %.1f ms".format(sandboxed.average() / 1e6))
             }
