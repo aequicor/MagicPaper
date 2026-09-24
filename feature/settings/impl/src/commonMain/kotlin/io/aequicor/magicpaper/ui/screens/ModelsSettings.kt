@@ -185,7 +185,7 @@ private fun VariantEditor(vm: DefaultSettingsComponent, profile: LlmProfile, mod
     var prompt by draftSession.textField("prompt")
     var extras by draftSession.field({ it.extras }, { value, extras -> value.copy(extras = extras) })
     val supported = fact?.supportedParameters
-    val subscription = profile.provider == ProviderType.OPENAI_SUBSCRIPTION
+    val subscription = profile.provider.subscription
     fun supports(key: String) = !subscription && (supported == null || key in supported)
     fun validNumber(text: String, min: Double, max: Double) = text.isBlank() || text.toDoubleOrNull()?.let { it.isFinite() && it in min..max } == true
     val valid = name.isNotBlank() && validNumber(temperature, 0.0, 2.0) && validNumber(topP, 0.0, 1.0) &&

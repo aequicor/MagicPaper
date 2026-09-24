@@ -20,7 +20,7 @@ data class ProviderSpec(
     val models: List<ModelInfo>,
     /** Провайдер физически реализован только JVM desktop-адаптером. */
     val desktopOnly: Boolean = false,
-    /** Авторизация через ChatGPT, без Base URL и API-ключа. */
+    /** Вход в аккаунт подписки (ChatGPT или Claude Code), без Base URL и API-ключа. */
     val usesSubscription: Boolean = false,
     /**
      * У маршрутизаторов каталог не является исчерпывающим договором: пользователь
@@ -49,6 +49,22 @@ object ProviderCatalog {
             keyHint = "вход через ChatGPT",
             requiresKey = false,
             models = listOf(ModelInfo("gpt-5.6-terra", ReasoningPresets.OPENAI_EFFORT)),
+            desktopOnly = true,
+            usesSubscription = true,
+        ),
+        ProviderSpec(
+            type = ProviderType.ANTHROPIC_SUBSCRIPTION,
+            displayName = "Anthropic (подписка Claude Code)",
+            defaultBaseUrl = "",
+            keyHint = "вход через Claude Code",
+            requiresKey = false,
+            // Claude Code's own aliases: the CLI resolves each to the newest model of that family.
+            models = listOf(
+                ModelInfo("sonnet", ReasoningPresets.CLAUDE_CODE_EFFORT),
+                ModelInfo("opus", ReasoningPresets.CLAUDE_CODE_EFFORT),
+                ModelInfo("fable", ReasoningPresets.CLAUDE_CODE_EFFORT),
+                ModelInfo("haiku"),
+            ),
             desktopOnly = true,
             usesSubscription = true,
         ),

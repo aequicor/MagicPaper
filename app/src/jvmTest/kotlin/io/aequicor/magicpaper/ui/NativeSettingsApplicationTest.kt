@@ -5,6 +5,7 @@ import io.aequicor.magicpaper.data.planning.*
 import io.aequicor.magicpaper.data.storage.InMemoryEventJournal
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
 import kotlin.test.*
@@ -71,6 +72,40 @@ class NativeSettingsApplicationTest {
             assertContains(service.state.value.notice.orEmpty(), "Не удалось сохранить")
             assertFalse(service.state.value.notice.orEmpty().contains("private"))
         } finally { release.complete(Unit); service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun engineSignInIsPendingUntilItEndsAndReportsItsOutcome() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val entered = Channel<Unit>(Channel.UNLIMITED)
+        val outcomes = Channel<EngineSignInResult>(Channel.UNLIMITED)
+        var calls = 0
+        val runtime = object : CodingRuntime by NoopCodingRuntime {
+            override suspend fun signIn(engine: CodingEngine): EngineSignInResult {
+                assertEquals(CodingEngine.CLAUDE_CODE, engine)
+                calls++; entered.send(Unit)
+                return outcomes.receive()
+            }
+        }
+        val service = ModelSettingsFixture().prepareCoding(runtime)
+        val recovery = CodingRecovery.SignIn(CodingEngine.CLAUDE_CODE)
+        try {
+            service.recover(recovery); entered.receive()
+            assertEquals(setOf<CodingRecovery>(recovery), service.state.value.coding.pendingRecoveries)
+            service.recover(recovery); runCurrent()
+            assertEquals(1, calls, "A pending sign-in is not started twice")
+            outcomes.send(EngineSignInResult.SignedIn); runCurrent()
+            assertTrue(service.state.value.coding.pendingRecoveries.isEmpty())
+            assertContains(service.state.value.notice.orEmpty(), "Вход в Claude Code выполнен")
+
+            service.recover(recovery); entered.receive()
+            outcomes.send(EngineSignInResult.Failed("Вход в Claude Code не завершён.")); runCurrent()
+            assertEquals("Вход в Claude Code не завершён.", service.state.value.notice)
+
+            service.recover(recovery); entered.receive()
+            service.cancelRecovery(recovery); runCurrent()
+            assertTrue(service.state.value.coding.pendingRecoveries.isEmpty(), "Cancelling clears the pending sign-in")
+            assertEquals("Вход в Claude Code не завершён.", service.state.value.notice, "A cancelled sign-in reports nothing")
+        } finally { service.close(); Dispatchers.resetMain() }
     }
 
     @Test fun failedRememberedPreferenceKeepsCreatedSessionWithoutPublishingUnsavedEngine() = runTest {

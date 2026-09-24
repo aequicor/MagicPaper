@@ -26,9 +26,11 @@ class LlmTransportException(
      * Автоматический повтор не поможет: причину меняет только человек — настройка подключения
      * или оплата. Так ведёт себя отказ в доступе к модели, который провайдеры присылают и
      * статусом 429 (Z.AI кодом 1113 сообщает им об отсутствии пакета ресурсов): повтор
-     * дословно вернёт тот же отказ и только потратит бюджет попыток.
+     * дословно вернёт тот же отказ и только потратит бюджет попыток. Так же и с подпиской, в аккаунт
+     * которой не выполнен вход: её исправляет только вход.
      */
-    val blocksAutomaticRetry: Boolean get() = rejection?.refusal == ProviderRefusal.ENTITLEMENT
+    val blocksAutomaticRetry: Boolean get() = rejection?.refusal == ProviderRefusal.ENTITLEMENT ||
+        rejection?.refusal == ProviderRefusal.SIGN_IN
 }
 
 /**

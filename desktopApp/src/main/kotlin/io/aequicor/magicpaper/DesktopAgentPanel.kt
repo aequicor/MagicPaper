@@ -17,11 +17,13 @@ import io.aequicor.magicpaper.designsystem.PaperAgentDockModel
 import io.aequicor.magicpaper.designsystem.PaperDockAuthor
 import io.aequicor.magicpaper.designsystem.PaperAgentDockShadowMargin
 import io.aequicor.magicpaper.designsystem.PaperDockMessage
+import io.aequicor.magicpaper.designsystem.PaperDockRecovery
 import io.aequicor.magicpaper.designsystem.PaperDockSession
 import io.aequicor.magicpaper.designsystem.PaperDockStep
 import io.aequicor.magicpaper.designsystem.PaperDockStepKind
 import io.aequicor.magicpaper.designsystem.PaperTheme
 import io.aequicor.magicpaper.domain.AppSettings
+import io.aequicor.magicpaper.domain.CodingRecovery
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.CodingStepKind
@@ -29,6 +31,8 @@ import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.ui.CodingService
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingState
+import io.aequicor.magicpaper.ui.actionLabel
+import io.aequicor.magicpaper.ui.pendingLabel
 import io.aequicor.magicpaper.ui.SettingsService
 import io.aequicor.magicpaper.ui.screens.activityTone
 import io.aequicor.magicpaper.ui.screens.aggregateDockTone
@@ -122,6 +126,8 @@ internal class DesktopAgentPanel(
         val anyRunning: Boolean,
         val sessionId: String,
         val animate: Boolean,
+        /** The failure actions behind the dock's step ids, so an activation names what to perform. */
+        val recoveries: Map<String, CodingRecovery> = emptyMap(),
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -254,6 +260,8 @@ internal class DesktopAgentPanel(
                 onStop = ::stop,
                 onOpenMainWindow = ::restoreOwner,
                 onSelectSession = { selectedSessionId.value = it },
+                onRecovery = { recover(it, cancel = false) },
+                onCancelRecovery = { recover(it, cancel = true) },
                 onResizeWidthBy = ::resizeWidthBy,
                 onResizeHeightBy = ::resizeHeightBy,
                 animateBackground = current.animate,
@@ -297,6 +305,15 @@ internal class DesktopAgentPanel(
             coding.abortCodingSession(current.sessionId)
         } catch (error: Exception) {
             AppLog.error("desktop_host", "agent.dock.stop.failed", error)
+        }
+    }
+
+    private fun recover(stepId: String, cancel: Boolean) {
+        val recovery = snapshot.value?.recoveries?.get(stepId) ?: return
+        try {
+            if (cancel) coding.cancelRecovery(recovery) else coding.recover(recovery)
+        } catch (error: Exception) {
+            AppLog.error("desktop_host", "agent.dock.recovery.failed", error)
         }
     }
 
@@ -506,6 +523,7 @@ internal class DesktopAgentPanel(
         val status = selected.status
         val waiting = status == CodingSessionStatus.WAITING
         val now = System.currentTimeMillis()
+        val recoveries = mutableMapOf<String, CodingRecovery>()
         return Snapshot(
             model = PaperAgentDockModel(
                 sessions = live.sortedWith(
@@ -526,7 +544,7 @@ internal class DesktopAgentPanel(
                     )
                 },
                 statusLabel = status.label,
-                messages = selected.dockMessages(settings.hideSystemSteps),
+                messages = selected.dockMessages(settings.hideSystemSteps, ui.pendingRecoveries, recoveries),
                 liveDetail = selected.liveDetail(),
                 pendingQuestion = selected.pendingQuestion(),
                 attentionCount = live.count { it.status in NEEDS_YOU || it.status == CodingSessionStatus.UNREAD },
@@ -542,6 +560,7 @@ internal class DesktopAgentPanel(
             anyRunning = live.any { it.running || it.draft.active },
             sessionId = selected.session.id,
             animate = settings.paperAnimationEnabled,
+            recoveries = recoveries.toMap(),
         )
     }
 
@@ -586,7 +605,9 @@ internal class DesktopAgentPanel(
         }
     }
 
-    private fun CodingSessionUi.dockMessages(hideSystemSteps: Boolean): List<PaperDockMessage> = messages
+    /** [recoveries] collects the failure action behind each step id the dock will report back. */
+    private fun CodingSessionUi.dockMessages(hideSystemSteps: Boolean, pending: Set<CodingRecovery>,
+        recoveries: MutableMap<String, CodingRecovery>): List<PaperDockMessage> = messages
         .takeLast(MAX_MESSAGES)
         .map { message ->
             PaperDockMessage(
@@ -597,8 +618,10 @@ internal class DesktopAgentPanel(
                 systemContext = message.systemContext,
                 failed = message.failed,
                 steps = message.steps.filter { it.isVisibleInChat(hideSystemSteps) }.mapIndexed { index, step ->
+                    val id = step.id.ifBlank { "${message.id}:legacy:$index" }
+                    step.recovery?.let { recoveries[id] = it }
                     PaperDockStep(
-                        id = step.id.ifBlank { "${message.id}:legacy:$index" },
+                        id = id,
                         kind = when (step.kind) {
                             CodingStepKind.ANSWER -> PaperDockStepKind.ANSWER
                             CodingStepKind.THINKING -> PaperDockStepKind.THINKING
@@ -610,6 +633,7 @@ internal class DesktopAgentPanel(
                         tool = step.tool,
                         running = step.running,
                         ok = step.ok,
+                        recovery = step.recovery?.let { PaperDockRecovery(it.actionLabel, it.pendingLabel, it in pending) },
                     )
                 },
                 needsVerification = completedResponseId == message.id && !manuallyVerified,

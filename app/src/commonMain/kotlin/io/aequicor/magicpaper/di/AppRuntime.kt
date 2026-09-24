@@ -92,7 +92,8 @@ class MagicPaperRuntime internal constructor(
                 }
                 scope.launch {
                     settings.state.collect { state ->
-                        chat.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available, state.openAiSubscription.account?.signedIn == true)
+                        chat.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available || state.claudeSubscription.available,
+                            state.openAiSubscription.account?.signedIn == true)
                         extensions.forEach { it.updateConfiguration(state) }
                     }
                 }

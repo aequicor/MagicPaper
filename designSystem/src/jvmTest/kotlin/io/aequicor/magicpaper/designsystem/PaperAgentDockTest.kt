@@ -429,6 +429,41 @@ class PaperAgentDockTest {
         } finally { onPaperUi { scene.close() } }
     }
 
+    @Test fun anErrorsRecoveryIsOfferedUnderItAndReportsItsStep() {
+        val frames = Frames()
+        val pending = mutableStateOf(false)
+        val started = mutableListOf<String>()
+        val cancelled = mutableListOf<String>()
+        fun model(pending: Boolean) = busyModel.copy(busy = false, liveDetail = null, messages = listOf(
+            PaperDockMessage("1", PaperDockAuthor.USER, "Проверь сборку."),
+            PaperDockMessage("2", PaperDockAuthor.AGENT, "", failed = true, steps = listOf(
+                PaperDockStep("t:0", PaperDockStepKind.ERROR, "Claude Code не авторизован.", ok = false,
+                    recovery = PaperDockRecovery("Войти в Claude Code", "Подтвердите вход в браузере", pending)),
+            )),
+        ))
+        val scene = scene(PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight) {
+            Dock(true, {}, model(pending.value), onRecovery = { started += it }, onCancelRecovery = { cancelled += it })
+        }
+        try {
+            frames.draw(scene)
+            onPaperUi {
+                scene.capture(frames, "expanded-recovery")
+                scene.action("Войти в Claude Code").config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(listOf("t:0"), started, "Activation names the step whose recovery was chosen")
+                pending.value = true
+            }
+            frames.draw(scene)
+            onPaperUi {
+                scene.capture(frames, "expanded-recovery-pending")
+                assertTrue(scene.strings().any { it == "Подтвердите вход в браузере" }, "The pending flow says where to finish it")
+                assertNull(scene.actions().firstOrNull { "Войти в Claude Code" in it.description() },
+                    "A pending recovery cannot be started twice")
+                scene.action("Отменить").config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(listOf("t:0"), cancelled)
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
     @Composable
     private fun Dock(
         expanded: Boolean,
@@ -439,6 +474,8 @@ class PaperAgentDockTest {
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
         onSelectSession: (String) -> Unit = {},
+        onRecovery: (String) -> Unit = {},
+        onCancelRecovery: (String) -> Unit = {},
         onResizeWidthBy: (Float) -> Unit = {},
         onResizeHeightBy: (Float) -> Unit = {},
         onDragStart: (Float, Float) -> Unit = { _, _ -> },
@@ -461,6 +498,8 @@ class PaperAgentDockTest {
             onStop = onStop,
             onOpenMainWindow = {},
             onSelectSession = onSelectSession,
+            onRecovery = onRecovery,
+            onCancelRecovery = onCancelRecovery,
             onResizeWidthBy = onResizeWidthBy,
             onResizeHeightBy = onResizeHeightBy,
             onDragStart = onDragStart,

@@ -59,14 +59,12 @@ internal class ClaudeExecutable(
         val version = try { version(file) } catch (failure: java.io.IOException) { report(failure); null }
         if (version == null) return@withContext NativeInstallationStatus(NativeInstallationPhase.ERROR, "Claude Code не отвечает на проверку версии: ${file.path}")
         val signedIn = try { signedIn(file) } catch (failure: java.io.IOException) { report(failure); null }
-        val detail = if (signedIn == false)
-            "Claude Code найден: ${file.path}. Вход не выполнен: выполните \"${file.path}\" auth login или укажите ключ API в подключении Anthropic."
-        else "Claude Code установлен: ${file.path}"
-        NativeInstallationStatus(NativeInstallationPhase.READY, detail, version)
+        // The account is shown and signed in beside the engine, so the detail names only the installation.
+        NativeInstallationStatus(NativeInstallationPhase.READY, "Claude Code установлен: ${file.path}", version, signedIn)
     }
 
     /** `claude auth status` prints JSON and exits 1 when signed out; an older CLI without it leaves the answer unknown. */
-    private fun signedIn(file: File): Boolean? = probe(file, "auth", "status")?.let { (_, text) ->
+    fun signedIn(file: File): Boolean? = probe(file, "auth", "status")?.let { (_, text) ->
         Regex("\"loggedIn\"\\s*:\\s*(true|false)").find(text)?.groupValues?.get(1)?.toBooleanStrict()
     }
 

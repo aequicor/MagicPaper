@@ -29,6 +29,10 @@ interface SettingsService {
     fun cancelOpenAiSubscriptionLogin()
     fun logoutOpenAiSubscription()
     fun openAiSubscriptionSignedIn(): Boolean
+    /** Вход Claude Code для подписки Claude; ход и итог — в [SettingsState.claudeSubscription]. */
+    fun refreshClaudeSubscription()
+    fun signInClaudeSubscription()
+    fun cancelClaudeSubscriptionSignIn()
     fun fetchModels(draft: LlmProfile)
     fun refreshProfileParameters(profileId: String)
     fun testConnection(draft: LlmProfile)

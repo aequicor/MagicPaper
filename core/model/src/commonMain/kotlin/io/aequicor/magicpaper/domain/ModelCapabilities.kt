@@ -166,7 +166,7 @@ data class ModelCapabilities(
             provider: ProviderType,
             vision: Boolean,
         ): Boolean = when (provider) {
-            ProviderType.ANTHROPIC, ProviderType.GOOGLE, ProviderType.OPENAI_SUBSCRIPTION -> false
+            ProviderType.ANTHROPIC, ProviderType.GOOGLE, ProviderType.OPENAI_SUBSCRIPTION, ProviderType.ANTHROPIC_SUBSCRIPTION -> false
             else -> vision
         }
 

@@ -84,6 +84,15 @@ internal class LoggingCodingService(private val delegate: CodingService) : Codin
     override fun uninstallCodingRuntime(engine: CodingEngine) {
         logAction("uninstallCodingRuntime", "backend" to engine.name); delegate.uninstallCodingRuntime(engine)
     }
+    override fun recover(recovery: CodingRecovery) {
+        logAction("recover", *recovery.logFields()); delegate.recover(recovery)
+    }
+    override fun cancelRecovery(recovery: CodingRecovery) {
+        logAction("cancelRecovery", *recovery.logFields()); delegate.cancelRecovery(recovery)
+    }
+    private fun CodingRecovery.logFields() = when (this) {
+        is CodingRecovery.SignIn -> arrayOf("kind" to "sign_in", "backend" to engine.name)
+    }
     override fun addCodingProject() { logAction("addCodingProject"); delegate.addCodingProject() }
     override fun selectCodingProject(id: String) { logAction("selectCodingProject", "projectId" to id); delegate.selectCodingProject(id) }
     override fun approveImmunityIntervention(organismId: String, proposalId: String, action: ImmunityAction, deleteConfirmed: Boolean) {

@@ -75,7 +75,7 @@ internal class NativeRuntimeExtension(
         AppLog.phase("runtime", "agent.service") { feature.service.start() }
     }
     override fun updateConfiguration(state: SettingsState) = feature.service.updateConfiguration(
-        state.settings, state.llmProfiles, state.openAiSubscription.available,
+        state.settings, state.llmProfiles, state.openAiSubscription.available || state.claudeSubscription.available,
         state.openAiSubscription.account?.signedIn == true,
     )
     override suspend fun reload() = feature.service.reload()

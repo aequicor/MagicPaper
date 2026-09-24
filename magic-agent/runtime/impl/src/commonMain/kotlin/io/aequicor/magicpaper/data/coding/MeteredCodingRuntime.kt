@@ -28,7 +28,7 @@ class MeteredCodingRuntime(private val delegate: CodingRuntime, private val ledg
         val inherited = currentCoroutineContext()[UsageOwner]?.scope
         val owner = ownerOverride ?: if (session.id.startsWith("planning-") && inherited?.conversationId != null) inherited else UsageScope.coding(session)
         val model = profile?.modelId.orEmpty()
-        val subscription = profile?.provider == ProviderType.OPENAI_SUBSCRIPTION
+        val subscription = profile?.provider?.subscription == true
         var native = session.piSessionId.ifBlank { session.id }
         val invocation = Id.new()
         var pending: UsageRecord? = null

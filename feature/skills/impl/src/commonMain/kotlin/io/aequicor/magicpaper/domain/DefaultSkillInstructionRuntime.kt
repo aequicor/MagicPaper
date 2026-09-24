@@ -36,7 +36,7 @@ class DefaultSkillInstructionRuntime(private val source: SkillInstructionSource,
         } + "\n$MODE_RECEIPT")
         return try {
             require(profile != null && profile.configured) { throw Blocked("Подключите текстовый API-профиль.") }
-            require(profile.provider != ProviderType.OPENAI_SUBSCRIPTION) { throw Blocked("Изоляция инструментального транспорта не подтверждена. Выберите текстовый API-профиль.") }
+            require(!profile.provider.subscription) { throw Blocked("Изоляция инструментального транспорта не подтверждена. Выберите текстовый API-профиль.") }
             require(attachments.isEmpty()) { throw Blocked("Вложения отключены для пакетов навыков; передайте выбранный текст.") }
             require(history.size <= MAX_HISTORY) { throw Blocked("Контекст превышает 6 сообщений. Начните отдельный чат с выбранными фрагментами.") }
             val messages = buildList {

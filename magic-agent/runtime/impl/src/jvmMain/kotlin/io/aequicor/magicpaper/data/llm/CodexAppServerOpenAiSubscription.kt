@@ -77,7 +77,7 @@ class CodexAppServerOpenAiSubscription(
             .ifBlank { profile.advanced.systemPromptOverride }
         val usage = currentCoroutineContext()[UsageCall]
         return native.complete(NativeCompletionRequest(profile.modelId, system, CHAT_INSTRUCTIONS,
-            buildTurnInput(messages, profile.advanced.contextMessages), profile.resolveEffort(ModelDefaults.capability(profile)).level?.wire,
+            subscriptionTurnInput(messages, profile.advanced.contextMessages), profile.resolveEffort(ModelDefaults.capability(profile)).level?.wire,
             profile.advanced.safeTimeoutSeconds), onActivity) { usage?.result?.value = it }
     }
 
@@ -119,31 +119,6 @@ class CodexAppServerOpenAiSubscription(
             if (failure == null) failure = error else failure.addSuppressed(error)
         }
         failure?.let { throw it }
-    }
-
-    private fun buildTurnInput(messages: List<LlmMessage>, contextMessages: Int): JsonArray = buildJsonArray {
-        val conversational = messages.filter { it.role != LlmChatRole.SYSTEM }
-        val history = conversational.takeLast(contextMessages.coerceIn(1, 100))
-        val transcript = history.joinToString("\n\n") { message ->
-            val role = if (message.role == LlmChatRole.USER) "Пользователь" else "Ассистент"
-            buildString {
-                append(role).append(": ").append(message.content)
-                message.attachments.filter { it.kind == AttachmentKind.TEXT }.forEach { attachment ->
-                    append("\n\nФайл ").append(attachment.name).append(":\n").append(attachment.decodeText())
-                }
-            }
-        }
-        add(buildJsonObject { put("type", "text"); put("text", transcript) })
-        conversational.lastOrNull()?.attachments
-            ?.filter { it.kind == AttachmentKind.IMAGE }
-            ?.forEach { attachment ->
-                add(
-                    buildJsonObject {
-                        put("type", "image")
-                        put("url", "data:${attachment.mimeType};base64,${attachment.dataBase64}")
-                    },
-                )
-            }
     }
 
     internal companion object {

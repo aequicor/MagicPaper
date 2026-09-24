@@ -19,7 +19,14 @@ enum class ProviderType {
 
     /** OpenRouter: OpenAI-совместимый транспорт + поле reasoning для effort-моделей. */
     OPENROUTER,
+
+    /** Модели Claude, оплачиваемые подпиской Claude: отвечает установленный Claude Code. Только desktop. */
+    ANTHROPIC_SUBSCRIPTION,
 }
+
+/** Подключение по подписке: вход в аккаунт вместо Base URL и ключа, расход учитывается без стоимости. */
+val ProviderType.subscription: Boolean
+    get() = this == ProviderType.OPENAI_SUBSCRIPTION || this == ProviderType.ANTHROPIC_SUBSCRIPTION
 
 /** Как транспорт подставляет секрет в запрос. Значение по умолчанию сохраняет прежнее поведение. */
 @Serializable
@@ -115,9 +122,9 @@ data class LlmProfile(
     @kotlinx.serialization.Transient val invocationKey: String? = null,
 ) {
     val configured: Boolean
-        get() = modelId.isNotBlank() && (provider == ProviderType.OPENAI_SUBSCRIPTION || baseUrl.isNotBlank())
+        get() = modelId.isNotBlank() && (provider.subscription || baseUrl.isNotBlank())
     val codingConfigured: Boolean
-        get() = codingModelId.isNotBlank() && (provider == ProviderType.OPENAI_SUBSCRIPTION || baseUrl.isNotBlank())
+        get() = codingModelId.isNotBlank() && (provider.subscription || baseUrl.isNotBlank())
 
     /** Модель кодинг-контура: своя, если отмечена, иначе общая модель профиля. */
     val codingModel: String get() = codingModelId.ifBlank { modelId }

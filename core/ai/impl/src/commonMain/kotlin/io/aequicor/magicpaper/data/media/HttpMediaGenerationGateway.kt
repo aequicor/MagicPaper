@@ -222,7 +222,7 @@ class HttpMediaGenerationGateway(private val client: HttpClient, private val jso
 
     private fun validate(profile: LlmProfile, selection: MediaModelSelection, kind: MediaKind, requireEnabled: Boolean = true) {
         if (requireEnabled && !profile.enabled || profile.id != selection.profileId || selection.modelId.isBlank() ||
-            profile.provider == ProviderType.OPENAI_SUBSCRIPTION ||
+            profile.provider.subscription ||
             (kind == MediaKind.VIDEO) != (selection.protocol == MediaProtocol.DASHSCOPE_VIDEO)) {
             throw failure(MediaFailureKind.UNAVAILABLE, "Выберите доступное подключение и модель для генерации.")
         }

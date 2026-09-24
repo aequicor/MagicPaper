@@ -277,7 +277,7 @@ class LocalSkillExperience(
     }
 
     private suspend fun previewLocked(ids: Set<String>, profile: LlmProfile, automatic: Boolean): ExperiencePreview {
-        require(profile.configured && profile.provider != ProviderType.OPENAI_SUBSCRIPTION) { "Нужен разрешённый текстовый API-профиль." }
+        require(profile.configured && !profile.provider.subscription) { "Нужен разрешённый текстовый API-профиль." }
         val rows = state.outcomes.filter { it.id in ids }
         require(rows.size == ids.size && rows.size in 2..6 && rows.any { it.success } && rows.map { it.scenario }.distinct().size == 1)
         require(rows.none { it.verification == ExperienceVerification.UNAVAILABLE }) { "Для обучения нужны проверенные результаты." }

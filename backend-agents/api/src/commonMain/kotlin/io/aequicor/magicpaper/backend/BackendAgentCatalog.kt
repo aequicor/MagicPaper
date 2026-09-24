@@ -44,6 +44,9 @@ class BackendAgentCatalog constructor(contributions: List<BackendAgentContributi
                 require((BackendAgentCapability.NATIVE_MODEL_CATALOG in declared) == (agent.models != null)) {
                     "Native model catalog capability and implementation disagree"
                 }
+                require((BackendAgentCapability.NATIVE_SIGN_IN in declared) == (agent.signIn != null)) {
+                    "Native sign-in capability and implementation disagree"
+                }
             }
             return created.toList()
         } catch (failure: Throwable) {

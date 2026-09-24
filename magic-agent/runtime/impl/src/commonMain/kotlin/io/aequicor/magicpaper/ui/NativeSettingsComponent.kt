@@ -37,6 +37,8 @@ class NativeSettingsComponent(
     fun openModelsSettings() = onOutput(SettingsOutput.Models)
     fun prepareCodingRuntime(engine: CodingEngine) = coding.prepareCodingRuntime(engine)
     fun uninstallCodingRuntime(engine: CodingEngine) = coding.uninstallCodingRuntime(engine)
+    fun recover(recovery: CodingRecovery) = coding.recover(recovery)
+    fun cancelRecovery(recovery: CodingRecovery) = coding.cancelRecovery(recovery)
     override fun onAction(action: SettingsAction) {
         when (action) {
             is SettingsAction.Save -> service.saveSettings(action.settings)

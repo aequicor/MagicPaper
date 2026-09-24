@@ -84,6 +84,7 @@ class PiNativeProviderLibrary(
             "provider" to JsonPrimitive(when (profile.provider) {
                 ProviderType.ANTHROPIC -> "anthropic"; ProviderType.GOOGLE -> "google"; ProviderType.OPENROUTER -> "openrouter"
                 ProviderType.OPENAI_SUBSCRIPTION -> "openai-codex"; ProviderType.OPENAI_COMPATIBLE -> "magicpaper"
+                ProviderType.ANTHROPIC_SUBSCRIPTION -> throw IllegalArgumentException(PiModelsConfig.CLAUDE_SUBSCRIPTION_REFUSAL)
             }), "compat" to (modelRoot["compat"] ?: JsonObject(emptyMap())),
         ))
         val config = buildJsonObject {

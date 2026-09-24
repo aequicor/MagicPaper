@@ -18,7 +18,8 @@ class BackendAgentFactoryTest {
         assertFalse(BackendAgentCapability.MANAGED_INSTALLATION in codex.capabilities)
         val claude = catalog.descriptor(CodingEngine.CLAUDE_CODE)
         assertEquals("Claude Code", claude.adapterName)
-        assertEquals(setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_MODEL_CATALOG), claude.capabilities)
+        assertEquals(setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_MODEL_CATALOG,
+            BackendAgentCapability.NATIVE_SIGN_IN), claude.capabilities)
     }
 
     @Test fun onlyAnEngineWithItsOwnAccountOffersSubscriptionAccess() {

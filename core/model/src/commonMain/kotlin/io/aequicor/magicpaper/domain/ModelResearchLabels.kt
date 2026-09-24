@@ -21,6 +21,7 @@ val LlmProfile.completionEngineLabel: String get() = when (provider) {
     ProviderType.OPENROUTER -> "прямой API · OpenRouter"
     ProviderType.ANTHROPIC -> "прямой API · Anthropic"
     ProviderType.GOOGLE -> "прямой API · Google"
+    ProviderType.ANTHROPIC_SUBSCRIPTION -> "Claude Code · подписка Claude"
 }
 
 fun AppSettings.descriptionSearchLabel(): String = when (searchProvider) {

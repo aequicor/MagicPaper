@@ -54,20 +54,20 @@ class ClaudeExecutableTest {
         } finally { home.deleteRecursively() }
     }
 
-    @Test fun signedOutInstallationIsReadyButTellsHowToSignIn() = runBlocking {
+    @Test fun signedOutInstallationIsReadyAndReportsItsAccount() = runBlocking {
         if (windows) return@runBlocking
         val home = Files.createTempDirectory("claude-status").toFile()
         try {
             val binary = script(home, "case \"\$1\" in --version) echo '2.1.275 (Claude Code)';; auth) echo '{ \"loggedIn\": false }'; exit 1;; esac")
             val status = ClaudeExecutable(binary.path).status()
             assertEquals(NativeInstallationPhase.READY, status.phase)
-            assertContains(status.detail, "auth login")
+            assertEquals(false, status.signedIn, "The settings offer the sign-in from this state")
             assertEquals("2.1.275", status.version)
             val signedIn = script(home, "case \"\$1\" in --version) echo '2.1.275 (Claude Code)';; auth) echo '{ \"loggedIn\": true }';; esac", "claude2")
-            assertFalse("auth login" in ClaudeExecutable(signedIn.path).status().detail)
+            assertEquals(true, ClaudeExecutable(signedIn.path).status().signedIn)
             val old = script(home, "case \"\$1\" in --version) echo '1.0.0 (Claude Code)';; *) exit 1;; esac", "claude3")
             assertEquals(NativeInstallationPhase.READY, ClaudeExecutable(old.path).status().phase)
-            assertFalse("auth login" in ClaudeExecutable(old.path).status().detail)
+            assertNull(ClaudeExecutable(old.path).status().signedIn, "A CLI without `auth status` leaves the account unknown")
         } finally { home.deleteRecursively() }
     }
 

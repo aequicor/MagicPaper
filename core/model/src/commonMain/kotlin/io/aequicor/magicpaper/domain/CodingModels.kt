@@ -94,7 +94,7 @@ fun CodingModelSelection.displayEffort(): EffortSelection =
  */
 fun LlmProfile.isNativeConnectionFor(engine: CodingEngine): Boolean = operational && when (engine) {
     CodingEngine.CODEX -> provider == ProviderType.OPENAI_SUBSCRIPTION
-    CodingEngine.CLAUDE_CODE -> provider == ProviderType.ANTHROPIC
+    CodingEngine.CLAUDE_CODE -> provider == ProviderType.ANTHROPIC || provider == ProviderType.ANTHROPIC_SUBSCRIPTION
     CodingEngine.PI -> false
 }
 

@@ -9,7 +9,7 @@ object ProviderControls {
     fun parameters(profile: LlmProfile): JsonObject {
         val capability = ModelDefaults.capability(profile)
         val body = when (profile.provider) {
-            ProviderType.ANTHROPIC -> LlmPayloads.anthropic(profile, emptyList(), capability)
+            ProviderType.ANTHROPIC, ProviderType.ANTHROPIC_SUBSCRIPTION -> LlmPayloads.anthropic(profile, emptyList(), capability)
             ProviderType.GOOGLE -> return LlmPayloads.google(profile, emptyList(), capability)["generationConfig"]!!.jsonObject
             else -> LlmPayloads.openAi(profile, emptyList(), capability)
         }

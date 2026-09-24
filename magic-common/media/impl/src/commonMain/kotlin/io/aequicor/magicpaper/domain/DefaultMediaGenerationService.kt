@@ -482,7 +482,7 @@ class DefaultMediaGenerationService(
     }
     override suspend fun close() = prepareForReset()
     private fun validSelection(kind: MediaKind, selection: MediaModelSelection, profile: LlmProfile): Boolean =
-        profile.provider != ProviderType.OPENAI_SUBSCRIPTION && profile.id == selection.profileId &&
+        !profile.provider.subscription && profile.id == selection.profileId &&
             if (kind == MediaKind.VIDEO) selection.protocol == MediaProtocol.DASHSCOPE_VIDEO
             else selection.protocol in setOf(MediaProtocol.OPENAI_IMAGES, MediaProtocol.DASHSCOPE_IMAGE)
     private fun safeMessage(failure: Throwable): String = when (failure) {

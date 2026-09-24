@@ -173,6 +173,7 @@ class DesktopCodingRuntime(
     override fun ensureReady() = ensureReady(engines.first().descriptor.engine)
     override fun ensureReady(engine: CodingEngine): Flow<RuntimeStatus> =
         binding(engine).runtime.ensureReady().map { it.withCapabilities(engine) }
+    override suspend fun signIn(engine: CodingEngine) = binding(engine).runtime.signIn(engine)
     override suspend fun preflight(engine: CodingEngine, profile: LlmProfile) {
         require(profile.configured && profile.supportsCoding) { "Настройте подключение модели" }
         binding(engine).runtime.preflight(profile)

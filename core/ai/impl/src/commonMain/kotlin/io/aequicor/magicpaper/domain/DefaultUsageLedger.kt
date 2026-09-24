@@ -123,7 +123,7 @@ class DefaultUsageLedger(
         val owner = attribution?.scope ?: UsageScope()
         val call = UsageCall()
         val initial = UsageRecord(Id.new(), scope = owner, provider = profile.provider.name, model = profile.modelId,
-            subscription = profile.provider == ProviderType.OPENAI_SUBSCRIPTION)
+            subscription = profile.provider.subscription)
         record(observation, initial)
         var completed = false
         var primary: Throwable? = null

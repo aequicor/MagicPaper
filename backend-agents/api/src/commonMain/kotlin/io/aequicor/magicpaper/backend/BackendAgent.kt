@@ -85,6 +85,22 @@ fun interface NativeToolHistory {
 
 fun interface NativeRemoval { suspend fun remove() }
 
+/** The engine's own sign-in: it opens the vendor's page in the browser and returns once the flow ended. Cancellation stops it. */
+fun interface NativeSignIn { suspend fun signIn(): EngineSignInResult }
+
+/**
+ * One plain answer through the engine's own account: no project and no application tools. A failure is thrown as
+ * [NativeCompletionFailure] whose message is safe to show; cancellation stops the engine.
+ */
+interface NativeCompletion {
+    /** The subscription provider whose requests this engine answers, so the host routes by capability. */
+    val provider: ProviderType
+    suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit, onUsage: (UsageCallResult) -> Unit): String
+}
+
+/** [signedOut] marks the one failure the engine's own sign-in resolves. */
+class NativeCompletionFailure(message: String, val signedOut: Boolean = false, cause: Throwable? = null) : IllegalStateException(message, cause)
+
 /** Каталог моделей как его объявляет сам движок, без эвристик приложения. Ошибку опроса пробрасывает. */
 fun interface NativeModelCatalog { suspend fun models(): List<CodingModel> }
 
@@ -97,6 +113,10 @@ interface NativeAgentAdapter : AutoCloseable {
     val removal: NativeRemoval?
     /** Задан ровно тогда, когда у дескриптора есть [BackendAgentCapability.NATIVE_MODEL_CATALOG]. */
     val models: NativeModelCatalog? get() = null
+    /** Задан ровно тогда, когда у дескриптора есть [BackendAgentCapability.NATIVE_SIGN_IN]; a signed-out failure then carries [CodingRecovery.SignIn]. */
+    val signIn: NativeSignIn? get() = null
+    /** Present for an engine that answers plain requests on its own account, such as a chat on a subscription. */
+    val completion: NativeCompletion? get() = null
     suspend fun status(): NativeInstallationStatus
     fun prepare(): Flow<NativeInstallationStatus>
     /** Pure native model policy, resolved before the host builds provider controls and enrichment. */

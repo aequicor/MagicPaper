@@ -27,12 +27,15 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -114,7 +117,17 @@ public data class PaperDockStep(
     val tool: String = "",
     val running: Boolean = false,
     val ok: Boolean = true,
+    /** Offered under an ERROR step; activating it reports this step's [id] to the host. */
+    val recovery: PaperDockRecovery? = null,
 )
+
+/** An action that resolves a failure, named by the host; [pending] while the host carries it out. */
+public data class PaperDockRecovery(val label: String, val pendingLabel: String, val pending: Boolean = false)
+
+/** Step actions reach the rows through the transcript without threading through every layout level. */
+private class DockRecoveryHandlers(val onRecovery: (String) -> Unit, val onCancel: (String) -> Unit)
+
+private val LocalDockRecovery = staticCompositionLocalOf { DockRecoveryHandlers({}, {}) }
 
 /**
  * One transcript row, mirroring the application window's treatment: system notices and context
@@ -197,6 +210,9 @@ public fun PaperAgentDock(
     onStop: () -> Unit = {},
     onOpenMainWindow: () -> Unit = {},
     onSelectSession: (String) -> Unit = {},
+    /** A step's [PaperDockRecovery] was activated or, while pending, cancelled; the argument is the step's id. */
+    onRecovery: (String) -> Unit = {},
+    onCancelRecovery: (String) -> Unit = {},
     onResizeWidthBy: (Float) -> Unit = {},
     onResizeHeightBy: (Float) -> Unit = {},
     /** The application's paper-animation setting: the dock's background is the window's own. */
@@ -302,9 +318,14 @@ public fun PaperAgentDock(
                 PaperBackground(animateBackground, Modifier.matchParentSize(),
                     foreground = hovered || windowFocused)
                 if (expanded) {
-                    DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
-                        onOpenMainWindow, onSelectSession, onResizeWidthBy, onResizeHeightBy,
-                        { onExpandedChange(false) }, drag, dockedToStart)
+                    val latestRecovery by rememberUpdatedState(onRecovery)
+                    val latestCancel by rememberUpdatedState(onCancelRecovery)
+                    val recovery = remember { DockRecoveryHandlers({ latestRecovery(it) }, { latestCancel(it) }) }
+                    CompositionLocalProvider(LocalDockRecovery provides recovery) {
+                        DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
+                            onOpenMainWindow, onSelectSession, onResizeWidthBy, onResizeHeightBy,
+                            { onExpandedChange(false) }, drag, dockedToStart)
+                    }
                 } else {
                     DockCollapsed(model, colors, indicator, drag) {
                         // An explicit activation is not pointer-owned, so it survives having no pointer.
@@ -611,8 +632,14 @@ private fun DockStepRow(step: PaperDockStep) {
     val colors = LocalPaperColors.current
     when (step.kind) {
         PaperDockStepKind.ANSWER -> PaperChatMarkdown(step.title, compact = true)
-        PaperDockStepKind.ERROR -> PaperChatPlainText("✕ ${step.title}", color = colors.error,
-            modifier = Modifier.padding(vertical = 2.dp))
+        PaperDockStepKind.ERROR -> {
+            PaperChatPlainText("✕ ${step.title}", color = colors.error, modifier = Modifier.padding(vertical = 2.dp))
+            step.recovery?.let { recovery ->
+                val handlers = LocalDockRecovery.current
+                PaperRecoveryAction(recovery.label, recovery.pendingLabel, recovery.pending,
+                    { handlers.onRecovery(step.id) }, { handlers.onCancel(step.id) })
+            }
+        }
         PaperDockStepKind.INFO -> {
             if (!LocalPaperHideSystemSteps.current) {
                 PaperChatPlainText(step.title, color = colors.secondaryText,

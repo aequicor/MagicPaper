@@ -204,7 +204,9 @@ private fun WelcomeIntro() {
 private fun WelcomeModel(vm: DefaultSettingsComponent, state: SettingsState, draft: LlmProfile, onDraft: (LlmProfile) -> Unit) {
     val spec = ProviderCatalog.all.firstOrNull { it.displayName == draft.name }
     val subscription = draft.provider == ProviderType.OPENAI_SUBSCRIPTION
+    val claude = draft.provider == ProviderType.ANTHROPIC_SUBSCRIPTION
     val uriHandler = LocalUriHandler.current
+    androidx.compose.runtime.LaunchedEffect(claude) { if (claude) vm.refreshClaudeSubscription() }
     androidx.compose.runtime.LaunchedEffect(state.openAiSubscription.login?.url) {
         state.openAiSubscription.login?.url?.let(uriHandler::openUri)
     }
@@ -224,7 +226,7 @@ private fun WelcomeModel(vm: DefaultSettingsComponent, state: SettingsState, dra
         )
         Spacer(Modifier.height(12.dp))
         ProviderCatalog.all.forEach { candidate ->
-            val enabled = !candidate.desktopOnly || state.openAiSubscription.available
+            val enabled = state.available(candidate.type)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -280,6 +282,9 @@ private fun WelcomeModel(vm: DefaultSettingsComponent, state: SettingsState, dra
                     PaperAction(onClick = vm::startOpenAiSubscriptionLogin) { PaperText("Войти через ChatGPT") }
                 }
             }
+        } else if (claude) {
+            ClaudeSubscriptionAccount(state.claudeSubscription, vm::signInClaudeSubscription, vm::cancelClaudeSubscriptionSignIn,
+                vm::refreshClaudeSubscription)
         } else {
             Field("Base URL", draft.baseUrl) { onDraft(draft.copy(baseUrl = it)) }
             Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
@@ -288,7 +293,8 @@ private fun WelcomeModel(vm: DefaultSettingsComponent, state: SettingsState, dra
         }
         Field("Имя модели", draft.modelId) { onDraft(draft.copy(modelId = it)) }
         Spacer(Modifier.height(8.dp))
-        if (draft.configured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
+        if (draft.configured && (!subscription || state.openAiSubscription.account?.signedIn == true) &&
+            (!claude || state.claudeSubscription.signedIn == true)) {
             PaperText("✓ Источник готов", style = paperTextStyle(PaperTextRole.BODY), color = LocalPaperColors.current.action)
         }
     }

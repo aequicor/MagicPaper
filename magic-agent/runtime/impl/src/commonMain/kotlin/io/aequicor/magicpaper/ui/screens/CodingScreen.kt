@@ -24,6 +24,8 @@ import io.aequicor.magicpaper.designsystem.PaperToolbarButton
 import io.aequicor.magicpaper.designsystem.PaperToolbarIcon
 import androidx.compose.runtime.CompositionLocalProvider
 import io.aequicor.magicpaper.domain.CodingInteractionMode
+import io.aequicor.magicpaper.ui.actionLabel
+import io.aequicor.magicpaper.ui.pendingLabel
 import io.aequicor.magicpaper.domain.SessionKind
 import io.aequicor.magicpaper.domain.interactionMode
 import io.aequicor.magicpaper.domain.UserInteractionRequest
@@ -355,6 +357,7 @@ private fun SessionArea(
                 quarantineRecoveryState, quarantineOpen, { quarantineOpen = false },
                 { confirmed -> vm.reconcileCodingQuarantine(sessionInfo.id, confirmed) })
         }
+            CompositionLocalProvider(LocalCodingRecovery provides CodingRecoveryHandlers(ui.pendingRecoveries, vm::recover, vm::cancelRecovery)) {
             CodingChat(
                 project = project,
                 session = effective,
@@ -436,6 +439,7 @@ private fun SessionArea(
                 },
                 onWorktreeChange = if (sessionInfo.stageId == null && sessionInfo.sessionKind != SessionKind.SESSION) { { vm.toggleWorktree(sessionInfo.id) } } else null,
             )
+            }
     }
     if (switcherOpen) {
         CodingModelSwitcherDialog(
@@ -1409,6 +1413,12 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean, message: CodingMessa
                 color = LocalPaperColors.current.error,
                 modifier = Modifier.padding(vertical = 3.dp),
             )
+            step.recovery?.let { recovery ->
+                LocalCodingRecovery.current?.let { handlers ->
+                    io.aequicor.magicpaper.designsystem.PaperRecoveryAction(recovery.actionLabel, recovery.pendingLabel,
+                        recovery in handlers.pending, { handlers.onRecover(recovery) }, { handlers.onCancel(recovery) })
+                }
+            }
         }
         CodingStepKind.INFO, CodingStepKind.SYSTEM -> {
             PaperChatPlainText(
@@ -1424,6 +1434,15 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean, message: CodingMessa
         CodingStepKind.SUMMARY -> Unit
     }
 }
+
+/** Performs the actions offered beside failures; a surface that cannot perform them provides none. */
+internal class CodingRecoveryHandlers(
+    val pending: Set<io.aequicor.magicpaper.domain.CodingRecovery>,
+    val onRecover: (io.aequicor.magicpaper.domain.CodingRecovery) -> Unit,
+    val onCancel: (io.aequicor.magicpaper.domain.CodingRecovery) -> Unit,
+)
+
+internal val LocalCodingRecovery = androidx.compose.runtime.compositionLocalOf<CodingRecoveryHandlers?> { null }
 
 /** Свёрнутая строка рассуждения в ленте: весь текст — по клику (нижняя панель и так его показывает). */
 @Composable

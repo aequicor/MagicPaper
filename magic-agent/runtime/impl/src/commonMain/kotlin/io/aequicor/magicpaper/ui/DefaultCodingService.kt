@@ -192,6 +192,7 @@ class DefaultCodingService(
     private val deletedDraftSessionIds = mutableSetOf<String>()
     private val sessionCreationDrafts = mutableMapOf<String, DraftSession<CodingEngine>>()
     private val sessionCreationJobs = mutableMapOf<String, Job>()
+    private val recoveryJobs = mutableMapOf<CodingRecovery, Job>()
     private val deletedDraftProjectIds = mutableSetOf<String>()
     private val _sessionCreationStatus = MutableStateFlow<Map<String, SessionCreationStatus>>(emptyMap())
     override val sessionCreationStatus = _sessionCreationStatus.asStateFlow()
@@ -991,6 +992,45 @@ class DefaultCodingService(
             try { runtime.uninstall(engine); refreshCodingEngines() }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { AppLog.error("coding", "engine.action.failed", e); _state.update { it.copy(notice = "Не удалось выполнить действие с движком. Повторите попытку.") } }
+        }
+    }
+
+    override fun recover(recovery: CodingRecovery) {
+        val runtime = codingRuntime ?: return
+        if (recovery in recoveryJobs) return
+        _state.update { it.copy(coding = it.coding.copy(pendingRecoveries = it.coding.pendingRecoveries + recovery)) }
+        // Lazy start registers the job before an action that ends without suspending can clear it.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                when (recovery) {
+                    is CodingRecovery.SignIn -> signIn(runtime, recovery.engine)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                AppLog.error("coding", "recovery.failed", e, mapOf("kind" to recovery::class.simpleName.orEmpty()))
+                _state.update { it.copy(notice = "Не удалось выполнить действие. Повторите попытку.") }
+            } finally {
+                recoveryJobs.remove(recovery)
+                _state.update { it.copy(coding = it.coding.copy(pendingRecoveries = it.coding.pendingRecoveries - recovery)) }
+            }
+        }
+        recoveryJobs[recovery] = job
+        job.start()
+    }
+
+    override fun cancelRecovery(recovery: CodingRecovery) { recoveryJobs[recovery]?.cancel() }
+
+    private suspend fun signIn(runtime: CodingRuntime, engine: CodingEngine) {
+        when (val result = runtime.signIn(engine)) {
+            EngineSignInResult.SignedIn -> {
+                AppLog.info("coding", "engine.signed_in", mapOf("backend" to engine.name))
+                _state.update { it.copy(notice = "Вход в ${engine.title} выполнен. Продолжите сессию.") }
+                refreshCodingEngines()
+            }
+            is EngineSignInResult.Failed -> {
+                AppLog.info("coding", "engine.sign_in.unfinished", mapOf("backend" to engine.name))
+                _state.update { it.copy(notice = result.reason) }
+            }
         }
     }
 

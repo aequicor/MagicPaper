@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.di
 import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.backend.*
 import io.aequicor.magicpaper.data.coding.*
+import io.aequicor.magicpaper.data.llm.ClaudeCodeSubscription
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.browser.BrowserSessions
@@ -18,6 +19,8 @@ import kotlinx.coroutines.withContext
 class DesktopNativeRuntime internal constructor(
     val runtime: CodingRuntime,
     val subscription: OpenAiSubscriptionService,
+    /** Claude models on the user's Claude subscription; null when the build has no Claude Code adapter. */
+    val claudeSubscription: ClaudeSubscriptionService?,
     val modelLimits: ModelLimitCatalog?,
     private val nativeResources: List<AutoCloseable>,
     private val agents: List<BackendAgent>,
@@ -84,9 +87,11 @@ fun createDesktopNativeRuntime(
             { check(subscription.account().signedIn) { "Войдите в ChatGPT в настройках движков" } },
             subscription::withCachedContextWindow).createAll()
         bindings.forEach { owned += AutoCloseable { it.closeNative() } }
+        val agents = bindings.map { (it.runtime as GenericNativeRuntime).agent }
+        val claude = agents.firstOrNull { it.completion?.provider == ProviderType.ANTHROPIC_SUBSCRIPTION }?.let(::ClaudeCodeSubscription)
         return DesktopNativeRuntime(DesktopCodingRuntime(bindings, computer, skillSelection, checks, recordSkillRun, runObserver,
             workspaceRootPath = File(home, "coding").absolutePath),
-            subscription, engineModelLimits(), bindings.map { AutoCloseable { it.closeNative() } } + library, bindings.map { (it.runtime as GenericNativeRuntime).agent }, library, checks)
+            subscription, claude, engineModelLimits(), bindings.map { AutoCloseable { it.closeNative() } } + library, agents, library, checks)
     } catch (failure: Throwable) {
         owned.asReversed().forEach { resource -> try { resource.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) } }
         throw failure

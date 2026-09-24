@@ -11,7 +11,10 @@ import kotlinx.serialization.Serializable
  * пакетом ресурсов или подпиской. Признак отделяет отказ в доступе от ограничения числа
  * запросов: провайдеры сообщают о нём тем же статусом 429, но повтор здесь ничего не меняет.
  */
-enum class ProviderRefusal { PARAMETER, CONTEXT_LENGTH, MODEL, TOOLS, ENTITLEMENT, OTHER }
+enum class ProviderRefusal { PARAMETER, CONTEXT_LENGTH, MODEL, TOOLS, ENTITLEMENT, OTHER,
+    /** The account a subscription connection answers on is signed out; signing in, not a key, resolves it. */
+    SIGN_IN,
+}
 
 /**
  * Машинные поля отказа провайдера: код, тип ошибки, имя отвергнутого параметра и выведенный
@@ -46,6 +49,7 @@ fun LlmTransportException.logFields(): Map<String, String> = buildMap {
  * убрать или поменять в настройках модели.
  */
 fun LlmTransportException.safeReason(): String = when {
+    rejection?.refusal == ProviderRefusal.SIGN_IN -> "Подписка не подключена: войдите в аккаунт в настройках движков."
     // Отказ в доступе важнее статуса: тот же 429 провайдер использует и для «повторите позже»,
     // и для «ключ не оплачивает эту модель», а действие человека у них противоположное.
     rejection?.refusal == ProviderRefusal.ENTITLEMENT ->

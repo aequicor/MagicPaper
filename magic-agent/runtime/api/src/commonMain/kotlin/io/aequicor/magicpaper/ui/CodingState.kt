@@ -196,6 +196,8 @@ data class CodingUi(
     val projectStatuses: Map<String, CodingSessionStatus> = emptyMap(),
     val engines: Map<io.aequicor.magicpaper.domain.CodingEngine, RuntimeStatus> = emptyMap(),
     val preparingEngines: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
+    /** Действия у ошибок, которые сейчас выполняются, например вход движка, ждущий подтверждения в браузере. */
+    val pendingRecoveries: Set<io.aequicor.magicpaper.domain.CodingRecovery> = emptySet(),
     /** Активная вкладка проекта: диалог с агентом или панель плагина. */
     val sessionMode: CodingSessionMode = CodingSessionMode.DIALOG,
     val planning: CodingPlanningState = CodingPlanningState(),
@@ -275,14 +277,15 @@ data class CodingState(
     val coding: CodingUi = CodingUi(),
     val settings: AppSettings = AppSettings(),
     val llmProfiles: List<LlmProfile> = emptyList(),
+    /** This platform has the desktop transports of the subscription providers (ChatGPT and Claude Code). */
     val subscriptionAvailable: Boolean = false,
     val subscriptionSignedIn: Boolean = false,
     val notice: String? = null,
 ) {
     val availableLlmProfiles: List<LlmProfile> get() = llmProfiles.filter {
-        it.enabled && (it.provider != ProviderType.OPENAI_SUBSCRIPTION || subscriptionAvailable)
+        it.enabled && (!it.provider.subscription || subscriptionAvailable)
     }
     val modelPickerProfiles: List<LlmProfile> get() = llmProfiles.map {
-        if (it.provider == ProviderType.OPENAI_SUBSCRIPTION && !subscriptionAvailable) it.copy(enabled = false) else it
+        if (it.provider.subscription && !subscriptionAvailable) it.copy(enabled = false) else it
     }
 }

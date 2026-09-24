@@ -390,6 +390,12 @@ object ReasoningPresets {
         dialect = WireDialect.EFFORT,
     )
 
+    /** Claude Code `--effort`: уровень выбирает сам CLI, если не задан; выключить мышление нельзя. */
+    val CLAUDE_CODE_EFFORT = ReasoningCapability.Controls(
+        values = setOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.XHIGH, ReasoningEffort.MAX),
+        dialect = WireDialect.EFFORT,
+    )
+
     /** Самохостed-серверы с `reasoning_effort` (DeepSeek V4, Kimi, Qwen). */
     val COMPAT_EFFORT = ReasoningCapability.Controls(
         values = LADDER_UP_TO_HIGH,

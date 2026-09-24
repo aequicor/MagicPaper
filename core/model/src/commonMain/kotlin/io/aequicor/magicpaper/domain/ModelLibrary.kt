@@ -37,9 +37,10 @@ fun LlmProfile.sourceModelId(key: String): String = variants.firstOrNull { it.id
 fun LlmProfile.modelName(key: String): String = variants.firstOrNull { it.id == key }?.name
     ?: modelCatalog.firstOrNull { it.id == key }?.name ?: key
 val LlmProfile.selectionKey: String get() = invocationKey ?: modelId
-val LlmProfile.connectionConfigured: Boolean get() = provider == ProviderType.OPENAI_SUBSCRIPTION || baseUrl.isNotBlank()
+val LlmProfile.connectionConfigured: Boolean get() = provider.subscription || baseUrl.isNotBlank()
 val LlmProfile.operational: Boolean get() = enabled && connectionConfigured
-val LlmProfile.supportsCoding: Boolean get() = provider in setOf(ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENAI_SUBSCRIPTION, ProviderType.OPENROUTER, ProviderType.ANTHROPIC, ProviderType.GOOGLE)
+val LlmProfile.supportsCoding: Boolean get() = provider in setOf(ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENAI_SUBSCRIPTION,
+    ProviderType.OPENROUTER, ProviderType.ANTHROPIC, ProviderType.GOOGLE, ProviderType.ANTHROPIC_SUBSCRIPTION)
 
 fun LlmProfile.providerOptions(key: String): AdvancedLlmOptions {
     val model = modelCatalog.firstOrNull { it.id == sourceModelId(key) }

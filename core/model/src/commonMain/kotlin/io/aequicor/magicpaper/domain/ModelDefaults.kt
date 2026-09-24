@@ -79,6 +79,8 @@ object ModelDefaults {
                 openAiCapability(id)
             ProviderType.ANTHROPIC -> anthropicCapability(id)
             ProviderType.GOOGLE -> googleCapability(id)
+            // Claude Code takes `--effort` by level; the catalog declares which levels each alias accepts.
+            ProviderType.ANTHROPIC_SUBSCRIPTION -> ReasoningPresets.CLAUDE_CODE_EFFORT
         }
 
     /** Есть ли у модели нативная ручка усилия — спрашивают транспорты и UI. */

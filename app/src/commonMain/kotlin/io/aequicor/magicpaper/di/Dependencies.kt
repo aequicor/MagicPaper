@@ -30,6 +30,7 @@ internal fun buildRuntime(
     navigationSession: NavigationSessionConfig,
     filePicker: FilePicker = NoopFilePicker,
     openAiSubscription: OpenAiSubscriptionService? = null,
+    claudeSubscription: ClaudeSubscriptionService? = null,
     platformPlugins: List<MagicPlugin> = emptyList(),
     projectSkills: ProjectSkills? = null,
     packageInstructions: SkillInstructionSource? = null,
@@ -132,6 +133,7 @@ internal fun buildRuntime(
         )) }
         single<LlmGateway> { RoutingLlmGateway(buildMap {
             openAiSubscription?.let { put(ProviderType.OPENAI_SUBSCRIPTION, it) }
+            claudeSubscription?.let { put(ProviderType.ANTHROPIC_SUBSCRIPTION, it) }
             put(ProviderType.OPENAI_COMPATIBLE, OpenAiCompatibleGateway(get(), get()))
             put(ProviderType.OPENROUTER, OpenAiCompatibleGateway(get(), get()))
             put(ProviderType.ANTHROPIC, AnthropicGateway(get(), get()))
@@ -140,6 +142,7 @@ internal fun buildRuntime(
         single<ModelDirectory> {
             val providers = RoutingModelDirectory(buildMap {
                 openAiSubscription?.let { put(ProviderType.OPENAI_SUBSCRIPTION, it) }
+                claudeSubscription?.let { put(ProviderType.ANTHROPIC_SUBSCRIPTION, it) }
                 put(ProviderType.OPENAI_COMPATIBLE, OpenAiModelDirectory(get(), get()))
                 put(ProviderType.OPENROUTER, OpenAiModelDirectory(get(), get()))
                 put(ProviderType.ANTHROPIC, AnthropicModelDirectory(get(), get()))
@@ -205,7 +208,7 @@ internal fun buildRuntime(
             responseExtensions = responseExtensions()) }
         single { DefaultSettingsService(get(), get(), get(), get(), get(), chatHistory = get(), pluginPreferences = get<PluginService>(),
             skills = get(), skillCommands = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),
-            openAiSubscription = openAiSubscription, searchConnectionChecker = get(), usage = get(), draftRepository = get(),
+            openAiSubscription = openAiSubscription, claudeSubscription = claudeSubscription, searchConnectionChecker = get(), usage = get(), draftRepository = get(),
             mediaGeneration = get(), mediaStore = get(),
             clearCodingOverrides = { id -> get<RuntimeExtensions>().owners.forEach { it.clearProfileOverrides(id) } },
             onDataChanged = { get<ChatService>().start(); get<RuntimeExtensions>().owners.forEach { it.reload() }; get<PluginService>().start() },

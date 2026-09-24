@@ -31,6 +31,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,6 +59,7 @@ class DefaultSettingsService(
     private val gateway: LlmGateway? = null,
     private val dossierResearcher: DossierResearcher? = null,
     private val openAiSubscription: OpenAiSubscriptionService? = null,
+    private val claudeSubscription: ClaudeSubscriptionService? = null,
     private val searchConnectionChecker: SearchConnectionChecker? = null,
     val usage: UsageLedger,
     private val clearCodingOverrides: suspend (String) -> Unit = {},
@@ -102,7 +104,8 @@ class DefaultSettingsService(
         drafts.allowProfiles(profiles.map { it.id })
         _state.update { it.copy(storageInfo = store.description,
             showWelcome = !it.settings.onboardingDone,
-            openAiSubscription = it.openAiSubscription.copy(available = openAiSubscription != null)) }
+            openAiSubscription = it.openAiSubscription.copy(available = openAiSubscription != null),
+            claudeSubscription = it.claudeSubscription.copy(available = claudeSubscription != null)) }
     }
     private fun reflectConfiguration() {
         val saved = configuration.state.value
@@ -124,7 +127,8 @@ class DefaultSettingsService(
         scope.launch {
             try {
                 val withProfile = onboardingProfile != null && onboardingProfile.configured &&
-                    (onboardingProfile.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscriptionSignedIn())
+                    (onboardingProfile.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscriptionSignedIn()) &&
+                    (onboardingProfile.provider != ProviderType.ANTHROPIC_SUBSCRIPTION || _state.value.claudeSubscription.signedIn == true)
                 if (withProfile) configuration.saveProfile(onboardingProfile.migrateModelLibrary(), configuration.state.value.profileRefs[onboardingProfile.id])
                 val done = settings.copy(
                     onboardingDone = true,
@@ -514,6 +518,56 @@ class DefaultSettingsService(
         }
     }
 
+    // Same identity rule as the ChatGPT account: a late check must not overwrite a later sign-in.
+    private var claudeOperation = 0L
+    private var claudeSignIn: Job? = null
+
+    override fun refreshClaudeSubscription() {
+        val service = claudeSubscription ?: return
+        if (_state.value.claudeSubscription.let { it.checking || it.signingIn }) return
+        val operation = ++claudeOperation
+        _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(checking = true, error = null)) }
+        scope.launch {
+            try {
+                val signedIn = service.signedIn()
+                if (operation == claudeOperation) _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(signedIn = signedIn)) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                providerFailed("claude_subscription_refresh", failure)
+                if (operation == claudeOperation) _state.update {
+                    it.copy(claudeSubscription = it.claudeSubscription.copy(error = "Не удалось проверить вход в Claude Code. Повторите запрос."))
+                }
+            } finally { if (operation == claudeOperation) _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(checking = false)) } }
+        }
+    }
+
+    /** Claude Code opens its sign-in page itself; the flow ends when the browser returns to it, or on cancel. */
+    override fun signInClaudeSubscription() {
+        val service = claudeSubscription ?: return
+        if (_state.value.claudeSubscription.signingIn) return
+        val operation = ++claudeOperation
+        _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(signingIn = true, checking = false, error = null)) }
+        claudeSignIn = scope.launch {
+            try {
+                val result = service.signIn()
+                if (operation == claudeOperation) _state.update {
+                    it.copy(claudeSubscription = when (result) {
+                        EngineSignInResult.SignedIn -> it.claudeSubscription.copy(signedIn = true)
+                        is EngineSignInResult.Failed -> it.claudeSubscription.copy(error = result.reason)
+                    })
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                providerFailed("claude_subscription_login", failure)
+                if (operation == claudeOperation) _state.update {
+                    it.copy(claudeSubscription = it.claudeSubscription.copy(error = "Не удалось завершить вход. Повторите действие."))
+                }
+            } finally { if (operation == claudeOperation) _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(signingIn = false)) } }
+        }
+    }
+
+    override fun cancelClaudeSubscriptionSignIn() { claudeSignIn?.cancel() }
+
     override fun openAiSubscriptionSignedIn(): Boolean =
         _state.value.openAiSubscription.account?.signedIn == true
 
@@ -581,9 +635,11 @@ class DefaultSettingsService(
             return
         }
         if (!draft.configured) {
-            val message = if (draft.provider == io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION) {
-                "Войдите в ChatGPT и укажите модель."
-            } else "Укажите Base URL и имя модели, затем повторите."
+            val message = when (draft.provider) {
+                io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION -> "Войдите в ChatGPT и укажите модель."
+                io.aequicor.magicpaper.domain.ProviderType.ANTHROPIC_SUBSCRIPTION -> "Войдите в Claude Code и укажите модель."
+                else -> "Укажите Base URL и имя модели, затем повторите."
+            }
             _state.update { it.copy(editorModelsError = message) }
             return
         }

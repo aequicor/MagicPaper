@@ -132,9 +132,10 @@ cat <<'JSON'
 JSON
 exit 1""")
             val events = run(f, f.request())
-            val message = events.filterIsInstance<CodingEvent.Failed>().single().message
-            assertContains(message, "не авторизован")
-            assertContains(message, "\"${f.binary.path}\" auth login", message = "the command must name the executable that is actually used")
+            val failure = events.filterIsInstance<CodingEvent.Failed>().single()
+            assertContains(failure.message, "не авторизован")
+            assertEquals(CodingRecovery.SignIn(CodingEngine.CLAUDE_CODE), failure.recovery,
+                "The failure offers the engine's own sign-in instead of a command to type")
             assertTrue(events.none { it is CodingEvent.FinalText })
             assertEquals(CodingEvent.Finished, events.last())
         }

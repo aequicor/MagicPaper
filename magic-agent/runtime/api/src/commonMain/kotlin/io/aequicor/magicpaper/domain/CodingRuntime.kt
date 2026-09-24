@@ -41,6 +41,8 @@ interface CodingRuntime : ChatBackend {
     suspend fun status(engine: CodingEngine): RuntimeStatus = status()
     fun ensureReady(engine: CodingEngine): Flow<RuntimeStatus> = ensureReady()
     suspend fun uninstall(engine: CodingEngine) = uninstall()
+    /** The engine's own sign-in flow ([CodingRecovery.SignIn]); returns once it ended. Cancellation stops it. */
+    suspend fun signIn(engine: CodingEngine): EngineSignInResult = EngineSignInResult.Failed("Вход для этого движка недоступен.")
     /** Exact terminal engine items only; missing output or a model's report is not completion evidence. */
     suspend fun nativeToolResults(session: CodingSession, callIds: Set<String>): List<CodingEvent.ToolFinished> = emptyList()
     /** Поддерживается ли бэкенд на этой платформе (веб и Android — нет). */

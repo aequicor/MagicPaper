@@ -54,6 +54,9 @@ internal object PiModelsConfig {
     /** Заглушка ключа для серверов без авторизации (локальный Ollama и т.п.). */
     const val ANONYMOUS_KEY = "magicpaper"
 
+    /** Claude Code alone holds the Claude subscription's credentials; pi has no way to use them. */
+    const val CLAUDE_SUBSCRIPTION_REFUSAL = "Подписка Claude Code работает в сессиях Claude Code и в чате. Выберите для pi подключение с ключом API."
+
     const val API_KEY_ENV = "MAGICPAPER_LLM_API_KEY"
     const val API_KEY_REFERENCE = "\$MAGICPAPER_LLM_API_KEY"
 
@@ -118,6 +121,7 @@ internal object PiModelsConfig {
 
     /** То же деревом: тестам удобнее читать поля, чем подстроки. */
     fun root(profile: LlmProfile, providerId: String = PROVIDER_ID, imageInput: Boolean = false) = buildJsonObject {
+        require(profile.provider != ProviderType.ANTHROPIC_SUBSCRIPTION) { CLAUDE_SUBSCRIPTION_REFUSAL }
         // Единый источник capabilities — vision, reasoning, thinking format, compat.
         val caps = ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl)
         put("providers", buildJsonObject {

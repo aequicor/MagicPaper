@@ -48,6 +48,13 @@ configuration through per-attempt files that never reach argv. It declares no na
 read-only run is limited to `Read`, `Grep`, `Glob` and application tools, a coding run skips permission
 prompts. Its journaled delivery stage is `CLAUDE_STDIN`.
 
+The CLI owns the Claude account, so the adapter declares `NATIVE_SIGN_IN`: `signIn` runs `claude auth login`
+without a terminal (the CLI opens its page in the browser and completes through its loopback callback) and a
+signed-out run fails with `CodingRecovery.SignIn`, which the transcript offers as a button. Its `completion`
+answers `ProviderType.ANTHROPIC_SUBSCRIPTION` — the chat on the Claude subscription — as one `claude -p` in an
+empty directory with only `WebSearch`/`WebFetch`, no user settings, MCP servers or saved session, and with any
+inherited API key, base URL or cloud switch removed so the request is billed to the subscription.
+
 Codex owns sandbox/approval policy, native start/resume/turn payload construction,
 web-item labels, terminal evidence, account/login/model RPC, native approvals and
 the app-server connection lifetime. `CodexRunRequest`

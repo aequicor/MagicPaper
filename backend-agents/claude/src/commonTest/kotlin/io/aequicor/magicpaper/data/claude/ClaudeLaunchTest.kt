@@ -17,6 +17,35 @@ class ClaudeLaunchTest {
         LlmProfile("p", "Anthropic", baseUrl, key, ProviderType.ANTHROPIC, auth, modelId = "claude-sonnet-4-5", effort = effort)
     private fun ClaudeLaunch.value(flag: String) = arguments[arguments.indexOf(flag) + 1]
 
+    @Test fun subscriptionAnswerSearchesTheWebButTouchesNothingOfTheUsers() {
+        val launch = ClaudeCommand.completion("/bin/claude", "sonnet", "xhigh", "/h/system.md")
+        assertEquals(listOf("/bin/claude", "-p"), launch.arguments.take(2))
+        assertEquals("stream-json", launch.value("--input-format"))
+        assertEquals("sonnet", launch.value("--model"))
+        assertEquals("xhigh", launch.value("--effort"))
+        assertEquals("/h/system.md", launch.value("--system-prompt-file"))
+        assertEquals("WebSearch,WebFetch", launch.value("--tools"))
+        assertEquals("WebSearch,WebFetch", launch.value("--allowedTools"))
+        assertEquals("dontAsk", launch.value("--permission-mode"))
+        assertEquals("", launch.value("--setting-sources"), "The user's settings, hooks and permission rules take no part")
+        assertTrue(listOf("--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands").all { it in launch.arguments })
+        assertTrue("bypassPermissions" !in launch.arguments)
+        assertTrue(launch.environment.isEmpty(), "A subscription answer carries no key of its own")
+        assertEquals(ClaudeCommand.SUBSCRIPTION_OVERRIDES, launch.removedEnvironment,
+            "An inherited key, base URL or cloud switch would bill or route the request elsewhere")
+        assertTrue("--effort" !in ClaudeCommand.completion("c", "haiku", null, "/s").arguments)
+    }
+
+    @Test fun codingRunOnTheSubscriptionDropsInheritedKeysButAKeyedProfileKeepsItsOwn() {
+        val subscription = LlmProfile("s", "Anthropic (подписка Claude Code)", "", provider = ProviderType.ANTHROPIC_SUBSCRIPTION, modelId = "opus")
+        val launch = ClaudeCommand.build("c", request(profile = subscription), files, ClaudeMcpServers.None, null)
+        assertTrue(launch.removedEnvironment.containsAll(ClaudeCommand.SUBSCRIPTION_OVERRIDES))
+        assertTrue(launch.environment.keys.none { it.startsWith("ANTHROPIC_") })
+        val keyed = ClaudeCommand.build("c", request(profile = profile(key = "sk-ant-test")), files, ClaudeMcpServers.None, null)
+        assertEquals("sk-ant-test", keyed.environment["ANTHROPIC_API_KEY"])
+        assertTrue("ANTHROPIC_API_KEY" !in keyed.removedEnvironment)
+    }
+
     @Test fun codingRunSkipsPermissionPromptsBecauseNobodyCanAnswerThem() {
         val launch = ClaudeCommand.build("/bin/claude", request(), files, ClaudeMcpServers.None, null)
         assertEquals("/bin/claude", launch.arguments.first())

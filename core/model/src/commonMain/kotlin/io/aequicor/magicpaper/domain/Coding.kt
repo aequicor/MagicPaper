@@ -6,6 +6,7 @@ import io.aequicor.magicpaper.domain.tools.ToolPhase
 
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -362,7 +363,7 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null, init
                 flushThinking()
                 flushText()
                 failed = event.message
-                steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false, id = nextStepId())
+                steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false, id = nextStepId(), recovery = event.recovery)
             }
             is CodingEvent.Notice -> if (event.message.isNotBlank()) steps += CodingStep(kind = CodingStepKind.INFO, title = event.message, id = nextStepId())
             is CodingEvent.OutputTruncated -> {
@@ -659,8 +660,8 @@ sealed interface CodingEvent {
     /** Движок сообщил, что прогон завершён (agent_end) — текста могло и не быть. */
     data object AgentEnd : CodingEvent
 
-    /** Ошибка выполнения. */
-    data class Failed(val message: String) : CodingEvent
+    /** Ошибка выполнения; [recovery] — действие, которое её устраняет, если движок его знает. */
+    data class Failed(val message: String, val recovery: CodingRecovery? = null) : CodingEvent
 
     /** Прогон завершён. */
     data object Finished : CodingEvent
@@ -695,7 +696,23 @@ data class CodingStep(
     /** References this individual search operation newly returned; empty in old logs. */
     val sources: List<SearchHit> = emptyList(),
     val media: GeneratedMedia? = null,
+    /** An action offered beside an ERROR step that resolves its cause; absent in old logs. */
+    val recovery: CodingRecovery? = null,
 )
+
+/** An action that resolves a failure, offered to the user beside its message. It is persisted with the step. */
+@Serializable
+sealed interface CodingRecovery {
+    /** The engine keeps its own account and is signed out; its sign-in flow resolves the failure. */
+    @Serializable @SerialName("sign_in")
+    data class SignIn(val engine: CodingEngine) : CodingRecovery
+}
+
+/** Outcome of an engine's own sign-in flow; [Failed.reason] is safe to show. */
+sealed interface EngineSignInResult {
+    data object SignedIn : EngineSignInResult
+    data class Failed(val reason: String) : EngineSignInResult
+}
 
 /** Роли в журнале проекта. */
 @Serializable

@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.domain.OpenAiSubscriptionAccount
+import io.aequicor.magicpaper.ui.ClaudeSubscriptionUi
 import io.aequicor.magicpaper.ui.OpenAiSubscriptionUi
 import io.aequicor.magicpaper.ui.components.SubscriptionAccountAction
 import java.io.File
@@ -36,6 +37,39 @@ class SubscriptionAccountRenderTest {
             }
         }
     }
+    @Test fun claudeSubscriptionOffersTheCliSignInAndShowsItWhilePending() {
+        val states = listOf(
+            "signed-out" to ClaudeSubscriptionUi(available = true, signedIn = false),
+            "pending" to ClaudeSubscriptionUi(available = true, signedIn = false, signingIn = true),
+            "signed-in" to ClaudeSubscriptionUi(available = true, signedIn = true),
+            "unavailable" to ClaudeSubscriptionUi(available = false),
+        )
+        for ((name, auth) in states) {
+            var signIns = 0; var cancels = 0
+            ImageComposeScene(390, 260) {
+                PaperTheme { PaperSurface { Column { ClaudeSubscriptionAccount(auth, { signIns++ }, { cancels++ }, {}) } } }
+            }.use { scene ->
+                repeat(6) { scene.render(it * 16_000_000L).close() }
+                val nodes = scene.nodes()
+                val texts = nodes.flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }.map { it.text }
+                fun action(label: String) = nodes.firstOrNull { node ->
+                    node.config.contains(SemanticsActions.OnClick) && node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { it == label }
+                }
+                when (name) {
+                    "signed-out" -> { action("Войти в Claude Code")!!.config[SemanticsActions.OnClick].action!!.invoke(); assertEquals(1, signIns) }
+                    "pending" -> {
+                        assertTrue("Подтвердите вход в браузере" in texts)
+                        action("Отменить")!!.config[SemanticsActions.OnClick].action!!.invoke(); assertEquals(1, cancels)
+                    }
+                    "signed-in" -> { assertTrue("✓ Claude Code: вход выполнен" in texts); assertNull(action("Войти в Claude Code")) }
+                    "unavailable" -> assertTrue(texts.any { "только в desktop" in it })
+                }
+                val file = File("build/reports/subscription-account/claude-$name.png").apply { parentFile.mkdirs() }
+                scene.render(100_000_000L).use { image -> file.writeBytes(image.encodeToData()!!.use { it.bytes }) }
+            }
+        }
+    }
+
     private fun ImageComposeScene.nodes(): List<SemanticsNode> {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }

@@ -39,6 +39,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
         bridge = DesktopProfileBridge(),
         filePicker = DesktopFilePicker(),
         openAiSubscription = native.subscription,
+        claudeSubscription = native.claudeSubscription,
         // Only this host installs an agent's executable bindings and lifecycle owner.
         platformDefinitions = { scope -> nativeRuntimeBindings(scope, native.runtime, DesktopProjectDirPicker(),
             GitPlanningWorkspace(authority = gitWorkspaces), taskWorkspace,

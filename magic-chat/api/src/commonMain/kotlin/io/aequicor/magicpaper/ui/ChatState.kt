@@ -10,6 +10,7 @@ import io.aequicor.magicpaper.domain.ProviderType
 data class ChatState(
     val settings: AppSettings = AppSettings(),
     val llmProfiles: List<LlmProfile> = emptyList(),
+    /** This platform has the desktop transports of the subscription providers (ChatGPT and Claude Code). */
     val subscriptionAvailable: Boolean = false,
     val subscriptionSignedIn: Boolean = false,
     val sessions: List<ChatSession> = emptyList(),
@@ -30,9 +31,9 @@ data class ChatState(
         sessions.filter { it.researchChatId == root.id }.sortedBy { it.createdAt }
     }.orEmpty()
     val availableLlmProfiles: List<LlmProfile> get() = llmProfiles.filter {
-        it.enabled && (it.provider != ProviderType.OPENAI_SUBSCRIPTION || subscriptionAvailable)
+        it.enabled && (!it.provider.subscription || subscriptionAvailable)
     }
     val modelPickerProfiles: List<LlmProfile> get() = llmProfiles.map {
-        if (it.provider == ProviderType.OPENAI_SUBSCRIPTION && !subscriptionAvailable) it.copy(enabled = false) else it
+        if (it.provider.subscription && !subscriptionAvailable) it.copy(enabled = false) else it
     }
 }

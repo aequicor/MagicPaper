@@ -12,6 +12,8 @@ data class RuntimeStatus(
     val dependenciesRemovable: Boolean? = null,
     /** Preparation only checks a runtime installed outside the app; it installs nothing; null when the producer did not report. */
     val verifiesExternalInstall: Boolean? = null,
+    /** The engine's own account ([CodingRecovery.SignIn]); null when the engine has none or could not tell. */
+    val signedIn: Boolean? = null,
 ) {
     val ready: Boolean get() = phase == RuntimePhase.READY
 }

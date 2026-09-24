@@ -34,6 +34,9 @@ internal class ClaudeBackendAgent(
     override val history: NativeToolHistory? = null
     override val removal: NativeRemoval? = null
     override val models = NativeModelCatalog { ClaudeModelCatalog.models }
+    override val signIn: NativeSignIn = ClaudeSignIn(executable, environment.diagnostics)
+    override val completion: NativeCompletion =
+        ClaudeCompletion(executable, File(root, "chat"), environment.diagnostics, environment.toolPresentation)
 
     override suspend fun status() = executable.status()
     override fun prepare() = flow { emit(status()) }
@@ -49,8 +52,7 @@ internal class ClaudeBackendAgent(
                     check(active.add(sessionId)) { "Session is already running" }
                 }
                 try {
-                    val failure = start(request) { send(it) }
-                    failure?.let { send(CodingEvent.Failed(it)) }
+                    start(request) { send(it) }?.let { send(it) }
                     send(CodingEvent.Finished)
                 } catch (cancelled: CancellationException) {
                     try { abort(sessionId) } catch (cleanup: Throwable) {
@@ -69,10 +71,10 @@ internal class ClaudeBackendAgent(
     }.flowOn(Dispatchers.IO)
 
     /** Runs one attempt; the result is the user-facing failure, or null when the engine finished with an answer. */
-    private suspend fun start(request: NativeAgentRequest, publish: suspend (CodingEvent) -> Unit): String? {
-        if (request.profile.provider != ProviderType.ANTHROPIC)
-            return "Claude Code работает с подключениями Anthropic. Выберите модель Anthropic для этой сессии."
-        val command = executable.find() ?: return executable.status().detail
+    private suspend fun start(request: NativeAgentRequest, publish: suspend (CodingEvent) -> Unit): CodingEvent.Failed? {
+        if (request.profile.provider != ProviderType.ANTHROPIC && request.profile.provider != ProviderType.ANTHROPIC_SUBSCRIPTION)
+            return CodingEvent.Failed("Claude Code работает с подключениями Anthropic. Выберите модель Anthropic для этой сессии.")
+        val command = executable.find() ?: return CodingEvent.Failed(executable.status().detail)
         check(File(request.workingDirectory).isDirectory) { "Working directory is unavailable" }
         val home = sessionHome(request.session.id)
         check(home.isDirectory || home.mkdirs()) { "Native session directory is unavailable" }
@@ -100,7 +102,7 @@ internal class ClaudeBackendAgent(
         }
     }
 
-    private suspend fun attempt(request: NativeAgentRequest, prompt: String, launch: ClaudeLaunch, publish: suspend (CodingEvent) -> Unit): String? {
+    private suspend fun attempt(request: NativeAgentRequest, prompt: String, launch: ClaudeLaunch, publish: suspend (CodingEvent) -> Unit): CodingEvent.Failed? {
         val sessionId = request.session.id
         val lifecycle = checkNotNull(currentCoroutineContext()[NativeAttemptContext]) { "Native lifecycle owner is missing" }
         val attempt = lifecycle.events.admitLaunch(lifecycle.run)
@@ -124,12 +126,14 @@ internal class ClaudeBackendAgent(
                 IllegalStateException("Native agent attempt failed").apply { stackTrace = failure.stackTrace },
                 mapOf("sessionId" to sessionId, "result" to "native_failure", "failure" to failure.javaClass.simpleName)) }
             return when {
-                result.aborted -> "Прогон прерван по команде пользователя."
-                terminal?.signedOut == true -> "Claude Code не авторизован. Выполните в терминале: \"${launch.arguments.first()}\" auth login — или укажите ключ API в подключении Anthropic."
-                terminal?.failed == true -> terminal.message
-                result.launchError != null -> "Не удалось запустить Claude Code. Проверьте установку в настройках движков."
-                terminal == null && result.exitCode != null && result.exitCode != 0 -> "Claude Code завершился с кодом ${result.exitCode}."
-                terminal == null || !answer -> "Не удалось получить ответ движка. Проверьте подключение и продолжите сессию."
+                result.aborted -> CodingEvent.Failed("Прогон прерван по команде пользователя.")
+                terminal?.signedOut == true -> CodingEvent.Failed(
+                    "Claude Code не авторизован. Войдите в аккаунт Claude или укажите ключ API в подключении Anthropic.",
+                    CodingRecovery.SignIn(descriptor.engine))
+                terminal?.failed == true -> terminal.message?.let { CodingEvent.Failed(it) }
+                result.launchError != null -> CodingEvent.Failed("Не удалось запустить Claude Code. Проверьте установку в настройках движков.")
+                terminal == null && result.exitCode != null && result.exitCode != 0 -> CodingEvent.Failed("Claude Code завершился с кодом ${result.exitCode}.")
+                terminal == null || !answer -> CodingEvent.Failed("Не удалось получить ответ движка. Проверьте подключение и продолжите сессию.")
                 else -> null
             }
         } finally { running.remove(sessionId, execution) }

@@ -47,6 +47,31 @@ internal object ClaudeCommand {
     /** Built-in tools of a read-only run. Command execution is deliberately absent: Claude has no read-only shell. */
     val READ_ONLY_TOOLS = listOf("Read", "Grep", "Glob")
 
+    /** Claude's own web tools: a plain answer may search, but it reads and changes nothing on the computer. */
+    val WEB_TOOLS = listOf("WebSearch", "WebFetch")
+
+    /**
+     * Inherited settings that would route a subscription request elsewhere: a key or token bills the API, a base URL
+     * or a cloud switch leaves Anthropic. A subscription run drops them, so the CLI answers on its own sign-in.
+     */
+    val SUBSCRIPTION_OVERRIDES = setOf("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+
+    /**
+     * One plain answer on the subscription: the conversation arrives as a stream-json user message on stdin, only the
+     * web tools exist, and neither the user's settings, MCP servers, commands nor a saved session take part.
+     */
+    fun completion(executable: String, modelId: String, effort: String?, systemPrompt: String): ClaudeLaunch = ClaudeLaunch(buildList {
+        add(executable)
+        addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
+        addAll(listOf("--model", modelId))
+        effort?.let(ReasoningEffort::fromWire)?.let(::effortName)?.let { addAll(listOf("--effort", it)) }
+        addAll(listOf("--system-prompt-file", systemPrompt))
+        addAll(listOf("--tools", WEB_TOOLS.joinToString(","), "--allowedTools", WEB_TOOLS.joinToString(",")))
+        addAll(listOf("--permission-mode", "dontAsk", "--strict-mcp-config", "--setting-sources", ""))
+        addAll(listOf("--no-session-persistence", "--disable-slash-commands"))
+    }, emptyMap(), SUBSCRIPTION_OVERRIDES)
+
     fun build(executable: String, request: NativeAgentRequest, files: ClaudeLaunchFiles, servers: ClaudeMcpServers, resume: String?): ClaudeLaunch {
         val restricted = request.mode != CodingInteractionMode.CODE
         val arguments = buildList {
@@ -66,8 +91,9 @@ internal object ClaudeCommand {
             files.extraDirectories.forEach { addAll(listOf("--add-dir", it)) }
             resume?.let { addAll(listOf("--resume", it)) }
         }
+        val subscription = if (request.profile.provider == ProviderType.ANTHROPIC_SUBSCRIPTION) SUBSCRIPTION_OVERRIDES else emptySet()
         return ClaudeLaunch(arguments, environment(request.profile, servers) + request.tools.environment,
-            request.tools.removedEnvironment - request.tools.environment.keys)
+            (request.tools.removedEnvironment + subscription) - request.tools.environment.keys)
     }
 
     /** A blank key leaves authentication to the CLI's own sign-in; a stored key overrides it for this run only. */

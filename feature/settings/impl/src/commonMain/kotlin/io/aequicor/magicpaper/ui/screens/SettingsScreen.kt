@@ -200,7 +200,13 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
     var chooseProvider by rememberSaveable { mutableStateOf(!profile.connectionConfigured) }
     DraftSaveError(draftSession)
     val subscription = draft.provider == ProviderType.OPENAI_SUBSCRIPTION
-    val subscriptionAvailable = state.openAiSubscription.available
+    val claude = draft.provider == ProviderType.ANTHROPIC_SUBSCRIPTION
+    // A subscription connection is usable only once its account is signed in; the others have nothing to sign in to.
+    val accountReady = when {
+        subscription -> state.openAiSubscription.account?.signedIn == true
+        claude -> state.claudeSubscription.signedIn == true
+        else -> true
+    }
     var modelQuery by draftSession.textField("modelQuery")
     val uriHandler = LocalUriHandler.current
     LaunchedEffect(state.openAiSubscription.login?.url) {
@@ -210,6 +216,11 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
         if (subscription && state.openAiSubscription.account == null && state.openAiSubscription.error == null) {
             vm.refreshOpenAiSubscription()
         }
+    }
+    // The CLI can be signed in elsewhere (a transcript's button, a terminal), so the account is read on every visit.
+    LaunchedEffect(claude) { if (claude) vm.refreshClaudeSubscription() }
+    LaunchedEffect(claude, state.claudeSubscription.signedIn) {
+        if (claude && state.claudeSubscription.signedIn == true && draft.modelCatalog.isEmpty()) vm.fetchModels(draft)
     }
     LaunchedEffect(subscription, state.openAiSubscription.account?.signedIn) {
         if (subscription && state.openAiSubscription.account?.signedIn == true && draft.modelCatalog.isEmpty()) {
@@ -243,7 +254,7 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
         Section("Провайдер")
         PaperAction(onClick = { chooseProvider = !chooseProvider }) { PaperText("${specName.ifBlank { "Выбрать поставщика" }} ▾") }
         if (chooseProvider) ProviderCatalog.all.forEach { candidate ->
-            val enabled = (!candidate.desktopOnly || subscriptionAvailable) && !state.editorModelsLoading
+            val enabled = state.available(candidate.type) && !state.editorModelsLoading
             ProviderRow(
                 spec = candidate,
                 selected = candidate.displayName == specName,
@@ -268,6 +279,9 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
         Field("Название источника", draft.name) { draft = draft.copy(name = it) }
         if (subscription) {
             SubscriptionAccount(vm, state)
+        } else if (claude) {
+            ClaudeSubscriptionAccount(state.claudeSubscription, vm::signInClaudeSubscription, vm::cancelClaudeSubscriptionSignIn,
+                vm::refreshClaudeSubscription)
         } else {
             Field("Base URL", draft.baseUrl) { draft = draft.copy(baseUrl = it) }
             Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
@@ -278,7 +292,7 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
         PaperDivider(Modifier.padding(vertical = 12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             PaperText("Избранные модели", Modifier.weight(1f), style = paperTextStyle(PaperTextRole.TITLE))
-            PaperAction(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
+            PaperAction(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured && accountReady) {
                 PaperText(if (state.editorModelsLoading) "Загрузка…" else if (draft.modelCatalog.isEmpty()) "Загрузить" else "Обновить", style = paperTextStyle(PaperTextRole.LABEL))
             }
         }
@@ -315,7 +329,7 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
             val first = draft.modelId.takeIf { it in draft.favoriteModels } ?: draft.favoriteModels.firstOrNull()
                 ?: draft.modelId.ifBlank { draft.modelCatalog.firstOrNull()?.id.orEmpty() }
             vm.saveLlmProfile(draft.copy(modelId = first, modelLibraryVersion = 1))
-        }, enabled = draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) { PaperText("Сохранить") }
+        }, enabled = draft.connectionConfigured && accountReady) { PaperText("Сохранить") }
         PaperAction(onClick = vm::closeLlmProfileEditor) { PaperText("Отмена") }
         }
     }
@@ -381,6 +395,31 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
             )
         }
     }
+}
+
+/**
+ * Вход Claude Code для подключения «Anthropic (подписка Claude Code)». Страницу входа открывает сам CLI, и учётные
+ * данные остаются у него, поэтому здесь только состояние и запуск входа.
+ */
+@Composable
+internal fun ClaudeSubscriptionAccount(auth: ClaudeSubscriptionUi, onSignIn: () -> Unit, onCancel: () -> Unit, onRefresh: () -> Unit) {
+    val colors = LocalPaperColors.current
+    if (!auth.available) {
+        PaperText("Подписка Claude Code поддерживается только в desktop-приложении.", color = colors.error, style = paperTextStyle(PaperTextRole.BODY))
+        return
+    }
+    PaperText(
+        when {
+            auth.checking -> "Проверяю вход в Claude Code…"
+            auth.signedIn == true -> "✓ Claude Code: вход выполнен"
+            else -> "Войдите в Claude Code: запросы будут расходовать лимит вашей подписки Claude, API-ключ не нужен."
+        },
+        style = paperTextStyle(PaperTextRole.BODY),
+        color = if (auth.signedIn == true) colors.action else colors.secondaryText,
+    )
+    auth.error?.let { PaperText(it, style = paperTextStyle(PaperTextRole.BODY), color = colors.error) }
+    if (auth.signedIn == true && !auth.signingIn) PaperAction(onClick = onRefresh, enabled = !auth.checking) { PaperText("Обновить") }
+    else PaperRecoveryAction("Войти в Claude Code", "Подтвердите вход в браузере", auth.signingIn, onSignIn, onCancel)
 }
 
 /** Авторизация и квоты OpenAI-подписки. URL OAuth открывается вызывающим composable. */

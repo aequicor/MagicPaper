@@ -121,7 +121,7 @@ class GenericNativeRuntimeTest {
             override suspend fun resumeAfterReset() { calls += "checks.resume" }
             override suspend fun close() { calls += "checks.close" }
         }
-        val runtime = io.aequicor.magicpaper.di.DesktopNativeRuntime(NoopCodingRuntime, subscription, null,
+        val runtime = io.aequicor.magicpaper.di.DesktopNativeRuntime(NoopCodingRuntime, subscription, null, null,
             listOf(AutoCloseable { calls += "resource.close" }), listOf(first, second), library, checks)
         runtime.prepareForReset()
         assertSame(cancelled, assertFailsWith<CancellationException> { runtime.resumeAfterReset() })
@@ -145,7 +145,7 @@ class GenericNativeRuntimeTest {
         val checks = object : io.aequicor.magicpaper.domain.checks.CommandChecks by testCommandChecks {
             override suspend fun prepareForReset() { calls += "checks.pause" }
         }
-        val runtime = io.aequicor.magicpaper.di.DesktopNativeRuntime(NoopCodingRuntime, subscription(), null,
+        val runtime = io.aequicor.magicpaper.di.DesktopNativeRuntime(NoopCodingRuntime, subscription(), null, null,
             emptyList(), listOf(unproven), library, checks)
         assertFailsWith<NativeCleanupUnconfirmed> { runtime.prepareForReset() }
         runtime.prepareForReset(discardUnresolvable = true)

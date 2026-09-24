@@ -73,7 +73,7 @@ internal class ExperienceFormOwner(
     }
 
     private suspend fun refresh() {
-        val currentProfiles = profiles.load().filter { it.configured && it.provider != ProviderType.OPENAI_SUBSCRIPTION }
+        val currentProfiles = profiles.load().filter { it.configured && !it.provider.subscription }
         val query = searchDraft.draft.state.value.value.query
         val fresh = withContext(Dispatchers.IO) {
             if (experience.hasLegacyData()) ExperienceFormView(loaded = true, legacy = true, profiles = currentProfiles)
@@ -138,7 +138,7 @@ internal class ExperienceFormOwner(
         if (!captured.loaded) return
         actions.launch {
             draft.awaitSaved()
-            val profile = profiles.load().singleOrNull { it.id == captured.value.profileId && it.configured && it.provider != ProviderType.OPENAI_SUBSCRIPTION }
+            val profile = profiles.load().singleOrNull { it.id == captured.value.profileId && it.configured && !it.provider.subscription }
                 ?: return@launch "Выберите доступный текстовый профиль."
             val prepared = withContext(Dispatchers.IO) {
                 if (suggested != null) experience.previewSuggestion(suggested, profile)

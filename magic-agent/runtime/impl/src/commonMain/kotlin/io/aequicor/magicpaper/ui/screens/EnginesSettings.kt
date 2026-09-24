@@ -25,15 +25,19 @@ import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.PaperPanel
 import io.aequicor.magicpaper.designsystem.PaperProgress
 import io.aequicor.magicpaper.designsystem.PaperProgressKind
+import io.aequicor.magicpaper.designsystem.PaperRecoveryAction
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.backend.BackendAgentDescriptor
 import io.aequicor.magicpaper.backend.BackendAgentCapability
 import io.aequicor.magicpaper.domain.CodingEngine
+import io.aequicor.magicpaper.domain.CodingRecovery
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import io.aequicor.magicpaper.ui.NativeSettingsComponent
 import io.aequicor.magicpaper.ui.SettingsState
+import io.aequicor.magicpaper.ui.actionLabel
+import io.aequicor.magicpaper.ui.pendingLabel
 
 import io.aequicor.magicpaper.ui.components.subscriptionAccountAction
 
@@ -63,7 +67,33 @@ fun EnginesSettings(vm: NativeSettingsComponent, state: SettingsState) {
         PaperText("Подписка ChatGPT", role = PaperTextRole.TITLE)
         PaperText("Один вход MagicPaper используется подключёнными движками.", role = PaperTextRole.LABEL)
         vm.subscription.Content(state.openAiSubscription, vm::subscriptionAccountAction)
+        vm.engines.filter { BackendAgentCapability.NATIVE_SIGN_IN in it.capabilities }.forEach { descriptor ->
+            val recovery = CodingRecovery.SignIn(descriptor.engine)
+            PaperDivider()
+            EngineAccountSection(descriptor, coding.coding.engines[descriptor.engine] ?: RuntimeStatus(RuntimePhase.UNKNOWN),
+                recovery in coding.coding.pendingRecoveries, { vm.recover(recovery) }, { vm.cancelRecovery(recovery) },
+                { vm.prepareCodingRuntime(descriptor.engine) })
+        }
         PaperButton("Настроить подключения и модели", { vm.openModelsSettings() }, kind = PaperButtonKind.QUIET)
+    }
+}
+
+/** The engine's own account, beside the ChatGPT subscription: its state and the sign-in that the engine performs itself. */
+@Composable
+internal fun EngineAccountSection(descriptor: BackendAgentDescriptor, status: RuntimeStatus, pending: Boolean,
+    onSignIn: () -> Unit, onCancel: () -> Unit, onRefresh: () -> Unit) {
+    val name = descriptor.adapterName
+    val recovery = CodingRecovery.SignIn(descriptor.engine)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PaperText("Подписка $name", role = PaperTextRole.TITLE)
+        PaperText("Вход хранит сам $name, поэтому он действует и в терминале.", role = PaperTextRole.LABEL)
+        PaperText(when (status.signedIn) {
+            true -> "Вход выполнен"
+            false -> "Войдите в $name: запросы будут расходовать лимит вашей подписки, API-ключ не нужен."
+            null -> if (status.phase == RuntimePhase.READY) "$name не сообщает, выполнен ли вход." else "Проверьте движок, чтобы узнать, выполнен ли вход."
+        }, color = if (status.signedIn == true) LocalPaperColors.current.action else LocalPaperColors.current.secondaryText)
+        if (status.signedIn == true && !pending) PaperButton("Обновить", onRefresh, kind = PaperButtonKind.QUIET)
+        else PaperRecoveryAction(recovery.actionLabel, recovery.pendingLabel, pending, onSignIn, onCancel)
     }
 }
 

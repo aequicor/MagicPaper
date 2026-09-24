@@ -163,6 +163,50 @@ class SettingsProviderOperationsTest {
         } finally { release.complete(Unit); fixture.service.close(); Dispatchers.resetMain() }
     }
 
+    @Test fun claudeSubscriptionSignInReportsItsOutcomeAndCanBeCancelled() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val claude = Claude()
+        val fixture = Fixture(this, claude = claude)
+        try {
+            fixture.service.start()
+            assertTrue(fixture.service.state.value.claudeSubscription.available)
+            fixture.service.refreshClaudeSubscription(); runCurrent()
+            assertEquals(false, fixture.service.state.value.claudeSubscription.signedIn)
+            assertFalse(fixture.service.state.value.claudeSubscription.checking)
+
+            fixture.service.signInClaudeSubscription(); runCurrent()
+            assertTrue(fixture.service.state.value.claudeSubscription.signingIn, "Signing in waits for the browser")
+            claude.outcome.complete(EngineSignInResult.SignedIn); runCurrent()
+            fixture.service.state.value.claudeSubscription.let { assertEquals(true, it.signedIn); assertFalse(it.signingIn); assertNull(it.error) }
+
+            claude.outcome = CompletableDeferred()
+            fixture.service.signInClaudeSubscription(); runCurrent()
+            claude.outcome.complete(EngineSignInResult.Failed("Вход в Claude Code не завершён.")); runCurrent()
+            assertEquals("Вход в Claude Code не завершён.", fixture.service.state.value.claudeSubscription.error)
+
+            claude.outcome = CompletableDeferred()
+            fixture.service.signInClaudeSubscription(); runCurrent()
+            fixture.service.cancelClaudeSubscriptionSignIn(); runCurrent()
+            assertFalse(fixture.service.state.value.claudeSubscription.signingIn, "Cancelling ends the pending sign-in")
+
+            claude.statusRead = { error("private CLI output") }
+            fixture.service.refreshClaudeSubscription(); runCurrent()
+            fixture.service.state.value.claudeSubscription.let {
+                assertEquals(true, it.signedIn, "A failed check keeps the last known account")
+                assertFalse(it.error!!.contains("private")); assertFalse(it.checking)
+            }
+        } finally { claude.outcome.cancel(); fixture.service.close(); Dispatchers.resetMain() }
+    }
+
+    private class Claude : ClaudeSubscriptionService {
+        var statusRead: suspend () -> Boolean? = { false }
+        var outcome = CompletableDeferred<EngineSignInResult>()
+        override suspend fun signedIn() = statusRead()
+        override suspend fun signIn() = outcome.await()
+        override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> = error("Unexpected models")
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected completion")
+    }
+
     private class Subscription : OpenAiSubscriptionService {
         var accountRead: suspend () -> OpenAiSubscriptionAccount = { OpenAiSubscriptionAccount(true) }
         var loginWait: suspend () -> OpenAiSubscriptionAccount = { OpenAiSubscriptionAccount(true) }
@@ -177,7 +221,7 @@ class SettingsProviderOperationsTest {
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected completion")
     }
 
-    private class Fixture(scope: TestScope, subscription: OpenAiSubscriptionService? = null) {
+    private class Fixture(scope: TestScope, subscription: OpenAiSubscriptionService? = null, claude: ClaudeSubscriptionService? = null) {
         val store = InMemoryKeyValueStore()
         private val json = Json { encodeDefaults = true }
         var models: suspend (LlmProfile) -> List<ModelDefaults.DiscoveredModel> = { error("Unexpected catalog") }
@@ -201,7 +245,7 @@ class SettingsProviderOperationsTest {
             override val supportsFilePicker = false
             override suspend fun export(json: String) = false
             override suspend fun import(): String? = null
-        }, store, json, modelDirectory = directory, dossierResearcher = researcher, openAiSubscription = subscription,
+        }, store, json, modelDirectory = directory, dossierResearcher = researcher, openAiSubscription = subscription, claudeSubscription = claude,
             gateway = object : LlmGateway {
                 override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>) = complete.invoke(profile)
             }, usage = object : UsageLedger {
