@@ -135,6 +135,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     val ABANDON = InputId("Abandon")
     val ABANDON_NOT_DISPATCHED = InputId("AbandonNotDispatched")
     val DISCARD_INTERRUPTED = InputId("DiscardInterrupted")
+    val DISCARD_UNDISPATCHED = InputId("DiscardUndispatched")
     val EDIT_REQUEST = InputId("EditRequest")
     val REPLACE_HISTORY = InputId("ReplaceHistory")
     val ORCHESTRATE = InputId("Orchestrate")
@@ -199,6 +200,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         InputSpec(ABANDON, Branch.INTENT),
         InputSpec(ABANDON_NOT_DISPATCHED, Branch.INTENT),
         InputSpec(DISCARD_INTERRUPTED, Branch.INTENT),
+        InputSpec(DISCARD_UNDISPATCHED, Branch.INTENT),
         InputSpec(EDIT_REQUEST, Branch.INTENT),
         InputSpec(REPLACE_HISTORY, Branch.INTENT),
         InputSpec(ORCHESTRATE, Branch.INTENT),
@@ -257,7 +259,8 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     // the representatives send as `expected`. `Abandon` and `AbandonNotDispatched` are accepted from
     // `INTERRUPTED` and `UNKNOWN`, and `DeferRecovery` from those two and from an unfinished history;
     // a deferral records the native decision it already made itself, and only that exact decision
-    // settles its run on continuation.
+    // settles its run on continuation. `DiscardInterrupted` settles an `INTERRUPTED` run and
+    // `DiscardUndispatched` an `UNKNOWN` one the service proved never reached an engine.
     // `NativeSessionBound` is accepted wherever a run stands and binds only a live one. The engine reports its session while
     // it runs, so the report can arrive after the run's owner settled the run by a stop, or by a restart that replaced its
     // generation. There it changes nothing: the stop or restart already decided the run, a replaced conversation must not be
@@ -292,6 +295,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         ABANDON to setOf(INTERRUPTED, UNKNOWN),
         ABANDON_NOT_DISPATCHED to setOf(INTERRUPTED, UNKNOWN),
         DISCARD_INTERRUPTED to setOf(INTERRUPTED),
+        DISCARD_UNDISPATCHED to setOf(UNKNOWN),
         EDIT_REQUEST to setOf(IDLE, ARCHIVED, WORKSPACE_UNKNOWN),
         REPLACE_HISTORY to setOf(IDLE, ARCHIVED, WORKSPACE_UNKNOWN),
         ORCHESTRATE to SESSION,
@@ -398,6 +402,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         is CodingMachine.Intent.Abandon -> ABANDON
         is CodingMachine.Intent.AbandonNotDispatched -> ABANDON_NOT_DISPATCHED
         is CodingMachine.Intent.DiscardInterrupted -> DISCARD_INTERRUPTED
+        is CodingMachine.Intent.DiscardUndispatched -> DISCARD_UNDISPATCHED
         is CodingMachine.Intent.EditRequest -> EDIT_REQUEST
         is CodingMachine.Intent.ReplaceHistory -> REPLACE_HISTORY
         is CodingMachine.Intent.Orchestrate -> ORCHESTRATE

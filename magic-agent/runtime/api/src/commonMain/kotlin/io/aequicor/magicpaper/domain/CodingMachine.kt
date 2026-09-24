@@ -86,6 +86,10 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         @Serializable @SerialName("Abandon") data class Abandon(val ref: RunRef, val decisionId: String, val previous: NativeRunRecoveryRef) : Intent
         @Serializable @SerialName("AbandonNotDispatched") data class AbandonNotDispatched(val ref: RunRef, val decisionId: String, val proof: NativeRunNoDispatchProof) : Intent
         @Serializable @SerialName("DiscardInterrupted") data class DiscardInterrupted(val ref: RunRef) : Intent
+        /** The service attests the native journal is alive for the session yet holds no attempt and no proof for this
+         * request: it never reached any engine, so there is no external outcome to fence. An empty journal cannot
+         * prove that and keeps refusing. */
+        @Serializable @SerialName("DiscardUndispatched") data class DiscardUndispatched(val ref: RunRef) : Intent
         @Serializable @SerialName("EditRequest") data class EditRequest(val session: SessionRef,
             val expected: List<CodingMessage>, val messages: List<CodingMessage>, val request: CodingRunCheckpoint) : Intent
         @Serializable @SerialName("ReplaceHistory") data class ReplaceHistory(val session: SessionRef,
@@ -302,6 +306,11 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             }
             is Intent.DiscardInterrupted -> {
                 require(requireRun(state, input.ref).phase == Phase.INTERRUPTED) { "Исход предыдущего запроса неизвестен" }
+                val next = changeRun(state, input.ref) { it.copy(pendingRun = null, taskWorktree = null) }.state
+                Transition(next.copy(runs = next.runs - input.ref.session.id))
+            }
+            is Intent.DiscardUndispatched -> {
+                require(requireRun(state, input.ref).phase == Phase.UNKNOWN) { "Неотправленным подтверждается только неизвестный исход" }
                 val next = changeRun(state, input.ref) { it.copy(pendingRun = null, taskWorktree = null) }.state
                 Transition(next.copy(runs = next.runs - input.ref.session.id))
             }

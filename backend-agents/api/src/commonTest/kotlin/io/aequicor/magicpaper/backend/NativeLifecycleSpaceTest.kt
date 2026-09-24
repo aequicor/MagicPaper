@@ -273,10 +273,26 @@ class NativeLifecycleSpaceTest {
         assertEquals(NativeLifecycleSpace.NO_DISPATCH_ACKNOWLEDGED, label(both))
         val later = run.copy(requestId = "later")
         assertTrue(refuses(both, Intent.Begin(later, recovery, secondDecision)))
-        // Each decision alone leaves the other unspoken for, and plain does too.
+        // The pending no-dispatch decision must be carried; the acknowledged outcome was itself reported,
+        // so the no-dispatch decision alone admits the next run, and plain still refuses on it.
         assertTrue(refuses(both, Intent.Begin(later, recovery)))
-        assertTrue(refuses(both, Intent.Begin(later, noDispatchAcknowledgement = secondDecision)))
+        assertFalse(refuses(both, Intent.Begin(later, noDispatchAcknowledgement = secondDecision)))
         assertTrue(refuses(both, Intent.Begin(later)))
+    }
+
+    /** A decision recorded over an outcome the engine reported holds nothing: only an outcome nobody
+     * can know demands exactly its decision be carried by the session's next admission. */
+    @Test fun aDecisionAboutAnOutcomeTheEngineReportedDoesNotFenceTheNextAdmission() {
+        for (reported in listOf(stoppedSucceeded, stoppedFailed, stoppedUndelivered)) {
+            val recorded = ended(acknowledged(reported))
+            assertFalse(refuses(recorded, Intent.Begin(fresh)), "a reported outcome needs nobody's decision carried")
+            assertFalse(refuses(recorded, Intent.Begin(fresh, recovery)), "carrying the recorded decision remains valid")
+        }
+        val uncertain = ended(acknowledged(stoppedUnknown))
+        assertTrue(refuses(uncertain, Intent.Begin(fresh)))
+        assertFalse(refuses(uncertain, Intent.Begin(fresh, recovery)))
+        val spent = step(uncertain, Intent.Begin(fresh, recovery), Fact.RunFinished(fresh))
+        assertTrue(refuses(spent, Intent.Begin(run.copy(requestId = "later"), recovery)), "the carried decision was spent")
     }
 
     /** The contract is adopted by the machine object, which is no part of an input, so no journal entry moves. */

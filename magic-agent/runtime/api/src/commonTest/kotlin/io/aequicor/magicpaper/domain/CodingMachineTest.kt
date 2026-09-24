@@ -129,6 +129,24 @@ class CodingMachineTest {
         assertEquals(ack, next.state.noDispatchAcknowledgements[session.id], "Parent admission is not native consumption")
     }
 
+    @Test fun discardUndispatchedSettlesOnlyAnUnknownRunTheServiceProvedNeverReachedAnEngine() {
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val ref = unknown.ref()
+        val discarded = apply(unknown, CodingMachine.Intent.DiscardUndispatched(ref))
+        assertNull(discarded.runs[session.id])
+        assertNull(discarded.sessions.getValue(session.id).pendingRun)
+        rejected(unknown, CodingMachine.Intent.DiscardUndispatched(ref.copy(requestId = "other")))
+        val active = running()
+        rejected(active, CodingMachine.Intent.DiscardUndispatched(active.ref()))
+        val stopped = apply(active, CodingMachine.Intent.Pause(active.ref()))
+        val interrupted = apply(stopped, CodingMachine.Fact.RunStopped(active.ref(), false))
+        assertEquals(CodingMachine.Phase.INTERRUPTED, interrupted.runs.getValue(session.id).phase)
+        rejected(interrupted, CodingMachine.Intent.DiscardUndispatched(interrupted.ref()))
+        // A settled session admits fresh work again.
+        val accepted = CodingMachine.reduce(discarded, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 4))
+        assertIs<CodingMachine.Effect.RunRequest>(accepted.effects.single())
+    }
+
     @Test fun deferRecoveryRecordsItsOwnNativeDecisionAndContinuationReusesOnlyIt() {
         val unknown = apply(running(), CodingMachine.Fact.Restored)
         val ref = unknown.ref()

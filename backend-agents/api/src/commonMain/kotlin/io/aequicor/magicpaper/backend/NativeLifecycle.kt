@@ -150,6 +150,10 @@ object NativeLifecycleMachine : Machine<NativeLifecycleMachine.State, NativeLife
                 val unresolved = attempts.filter { it.outcome == NativeOutcome.UNKNOWN || it.termination in setOf(NativeTermination.LIVE, NativeTermination.UNKNOWN) }
                 val consumed = state.runs.values.mapNotNull { it.recoveryAcknowledgement?.id }.toSet()
                 val pending = attempts.filter { it.acknowledgement != null && it.acknowledgement.id !in consumed }
+                // A decision about an outcome nobody can know is the only one this session's next admission must
+                // carry: one recorded over an outcome the engine itself reported holds no uncertainty, and
+                // demanding it carried would fence the session's runs forever once it was recorded.
+                val undecided = pending.filter { it.outcome == NativeOutcome.UNKNOWN }
                 val consumedNoDispatch = state.runs.values.mapNotNull { it.previousNoDispatchAcknowledgement?.id }.toSet()
                 val undispatched = sessionRuns.filter { it.noDispatchProof != null }
                 val pendingNoDispatch = undispatched.mapNotNull { it.noDispatchAcknowledgement }.filter { it.id !in consumedNoDispatch }
@@ -159,7 +163,7 @@ object NativeLifecycleMachine : Machine<NativeLifecycleMachine.State, NativeLife
                     pendingNoDispatch.isNotEmpty() && input.noDispatchAcknowledgement != pendingNoDispatch.last() -> reject("Нет решения продолжить неотправленный запуск")
                     input.noDispatchAcknowledgement != null && input.noDispatchAcknowledgement !in pendingNoDispatch -> reject("Решение о неотправленном запуске уже использовано или устарело")
                     unresolved.any { it.termination != NativeTermination.STOPPED || it.acknowledgement == null } -> reject("Предыдущий исход не подтверждён")
-                    pending.isNotEmpty() && input.acknowledgement != pending.last().acknowledgement -> reject("Нет явного решения продолжить после неизвестного исхода")
+                    undecided.isNotEmpty() && input.acknowledgement != undecided.last().acknowledgement -> reject("Нет явного решения продолжить после неизвестного исхода")
                     input.acknowledgement != null && pending.none { it.acknowledgement == input.acknowledgement } -> reject("Решение о восстановлении уже использовано или устарело")
                     state.closing || state.closed -> reject("Движок закрыт")
                     input.run in state.runs -> reject("Этот запрос уже принят; повторная отправка запрещена")

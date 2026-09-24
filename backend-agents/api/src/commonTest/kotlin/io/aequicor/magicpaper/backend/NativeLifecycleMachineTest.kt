@@ -75,11 +75,14 @@ class NativeLifecycleMachineTest {
                 assertTrue(it.effects.none { effect -> effect is NativeLifecycleMachine.Effect.Reject })
             }.state
             assertEquals(outcome, current.runs.getValue(run).attempts.single().outcome)
-            rejected(current, NativeLifecycleMachine.Intent.Begin(run.copy(requestId = "fresh")))
-            val admitted = NativeLifecycleMachine.reduce(current, NativeLifecycleMachine.Intent.Begin(run.copy(requestId = "fresh"), ack))
+            // An outcome the engine itself reported holds no uncertainty: the next admission needs nobody to
+            // carry the decision, though carrying it remains valid and is the only way to spend it.
+            val admitted = NativeLifecycleMachine.reduce(current, NativeLifecycleMachine.Intent.Begin(run.copy(requestId = "fresh")))
             assertIs<NativeLifecycleMachine.Effect.Execute>(admitted.effects.single())
-            val finished = NativeLifecycleMachine.reduce(admitted.state, NativeLifecycleMachine.Fact.RunFinished(run.copy(requestId = "fresh"))).state
-            rejected(finished, NativeLifecycleMachine.Intent.Begin(run.copy(requestId = "another"), ack))
+            val carried = NativeLifecycleMachine.reduce(current, NativeLifecycleMachine.Intent.Begin(run.copy(requestId = "carried"), ack))
+            assertIs<NativeLifecycleMachine.Effect.Execute>(carried.effects.single())
+            val spent = NativeLifecycleMachine.reduce(carried.state, NativeLifecycleMachine.Fact.RunFinished(run.copy(requestId = "carried"))).state
+            rejected(spent, NativeLifecycleMachine.Intent.Begin(run.copy(requestId = "another"), ack))
         }
     }
     @Test fun inputsRoundTripWithoutRequestPayload() {

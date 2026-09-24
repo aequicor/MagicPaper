@@ -1785,7 +1785,16 @@ class DefaultCodingService(
         val noDispatch = snapshot.noDispatch.filter { it.proof.sessionId == session.id && it.proof.requestId == run.ref.requestId }
         check(attempts.isEmpty() || noDispatch.isEmpty()) { "Подтверждения предыдущего запуска противоречат друг другу" }
         if (attempts.isEmpty()) {
-            val item = noDispatch.singleOrNull() ?: error("Подтверждение предыдущего запуска не найдено")
+            val item = noDispatch.singleOrNull()
+            if (item == null) {
+                // The journal is consistent and alive for this session, yet it holds no attempt and no proof for this
+                // request: it never reached any engine, so there is no external outcome to fence and the run settles
+                // as undispatched. A journal without resolved records of another request of the session — an empty
+                // or unreadable one, or one holding only noise about this very request — cannot prove that, and refuses.
+                check(snapshot.items.any { it.ref.requestId != run.ref.requestId } ||
+                    snapshot.noDispatch.any { it.proof.requestId != run.ref.requestId && it.acknowledgement != null }) { "Подтверждение предыдущего запуска не найдено" }
+                return acceptCodingSession(session, CodingMachine.Intent.DiscardUndispatched(run.ref))
+            }
             check(item.proof.engine == session.engine) { "Подтверждение относится к другому движку" }
             val saved = item.acknowledgement
             val decision = if (saved != null) {

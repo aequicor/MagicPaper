@@ -72,7 +72,9 @@ class CodingLeaveStoppedRecoveryTest {
             val binding = currentCoroutineContext()[NativeRunRecoveryBinding]
             val consumed = consumptions.map { it.acknowledgementId }.toSet()
             val pending = snapshot.items.filter { it.acknowledgement != null && it.acknowledgement!!.id !in consumed }
-            check(pending.isEmpty() || binding?.acknowledgement == pending.last().acknowledgement) {
+            // Mirrors the native admission rule: only a decision about an outcome nobody can know must be carried.
+            val undecided = pending.filter { it.outcome == NativeRunOutcome.UNKNOWN }
+            check(undecided.isEmpty() || binding?.acknowledgement == undecided.last().acknowledgement) {
                 "Нет явного решения продолжить после неизвестного исхода" }
             check(snapshot.noDispatch.none { it.acknowledgement == null }) { "Запуск не был отправлен; требуется явное решение продолжить" }
             val pendingProofs = snapshot.noDispatch.filter { it.acknowledgement != null && it.acknowledgement!!.id !in consumed }
@@ -99,6 +101,37 @@ class CodingLeaveStoppedRecoveryTest {
         val card = model.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
         model.submitQuestionnaire(card.id, listOf(PlanningAnswer("decision", listOf("leave"))))
         runCurrent()
+    }
+
+    @Test fun aRequestTheJournalProvesWasNeverAdmittedIsDiscardedAndTheSessionRunsAgain() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var model: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); val repo = JsonCodingProjectRepository(f.kv, f.json)
+            // The never-admitted request the machine fenced after a rejected native admission.
+            val fenced = request.copy(runId = "never-admitted", messageId = "fenced-input", responseId = "fenced-output",
+                responseTimelineId = "fenced-timeline")
+            repo.save(project); repo.saveSession(session.copy(pendingRun = fenced))
+            repo.saveMessages(project.id, session.id, listOf(CodingMessage(fenced.messageId, CodingRole.USER, fenced.prompt, createdAt = 1)))
+            // The journal is alive for the session and holds an earlier acknowledged FAILED attempt, exactly as
+            // the legacy "leave stopped" over-acknowledgement left it: nothing for this request, and nothing undecided.
+            val poison = NativeRunRecoveryAcknowledgement("legacy-ack",
+                NativeRunRecoveryRef(CodingEngine.PI, session.id, "old-request", 0), "legacy-decision")
+            val runtime = Runtime(NativeRunRecoverySnapshot(listOf(NativeRunRecoveryItem(
+                NativeRunRecoveryRef(CodingEngine.PI, session.id, "old-request", 0),
+                NativeRunOutcome.FAILED, NativeRunTermination.STOPPED, poison)), false))
+            model = f.prepareCoding(runtime, repo); runCurrent()
+
+            val card = model.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
+            model.submitQuestionnaire(card.id, listOf(PlanningAnswer("decision", listOf("retry")))); runCurrent()
+            assertEquals(1, runtime.calls.size, "The traceless run settles as undispatched and the continuation runs")
+            assertNull(runtime.bindings.single(), "A decision over a reported outcome must not be demanded")
+            assertEquals(0, runtime.acknowledgements.size)
+            val response = repo.messages(project.id, session.id).last { it.role == CodingRole.AGENT }
+            assertFalse(response.failed)
+            assertNull(repo.sessions(project.id).single().pendingRun)
+            assertNull(model.state.value.coding.currentSession!!.runPhase, "The traceless run was settled, not left fenced")
+        } finally { model?.close(); Dispatchers.resetMain() }
     }
 
     @Test fun leaveStoppedWithAKnownOutcomeRecordsNoDecisionAndContinuationIsAdmitted() = runTest {

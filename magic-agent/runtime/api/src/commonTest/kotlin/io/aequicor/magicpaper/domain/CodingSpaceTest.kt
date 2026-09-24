@@ -252,6 +252,7 @@ class CodingSpaceTest {
             CodingSpace.ABANDON to Intent.Abandon(ref, "decision", recovery),
             CodingSpace.ABANDON_NOT_DISPATCHED to Intent.AbandonNotDispatched(ref, "decision", proof),
             CodingSpace.DISCARD_INTERRUPTED to Intent.DiscardInterrupted(ref),
+            CodingSpace.DISCARD_UNDISPATCHED to Intent.DiscardUndispatched(ref),
             CodingSpace.EDIT_REQUEST to Intent.EditRequest(sessionRef, emptyList(),
                 listOf(CodingMessage(edited.messageId, CodingRole.USER, edited.prompt, createdAt = 4)), edited),
             CodingSpace.REPLACE_HISTORY to Intent.ReplaceHistory(sessionRef, emptyList(),

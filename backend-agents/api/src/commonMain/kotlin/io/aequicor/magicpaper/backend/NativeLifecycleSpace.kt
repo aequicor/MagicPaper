@@ -38,8 +38,10 @@ import io.aequicor.magicpaper.machine.acceptance
  *  - `stopped-*` is `STOPPED` and unacknowledged. `SUCCEEDED` and `FAILED` are told apart only here,
  *    because only a succeeded predecessor admits `LaunchRequested`; `stopped-outcome-unknown` is the
  *    one that still accepts `Terminal*` and blocks the next `Begin`;
- *  - `acknowledged-*` is the same with the acknowledgement recorded, which removes `Acknowledge` and
- *    `Terminal*` and lets exactly one `Begin` carry it forward.
+ *  - `acknowledged-*` is the same with the acknowledgement recorded, which removes `Acknowledge`
+ *    and `Terminal*`. An acknowledgement over an outcome nobody can know holds the session until
+ *    exactly one `Begin` carries it forward; one over an outcome the engine itself reported holds
+ *    nothing, so a plain `Begin` is admitted beside it too.
  *
  * Each shape exists twice, active and `ended-`: `Cancel`, `RunFinished`, `NeighbourMissing` and a
  * restart end a run, and an ended run refuses `LaunchRequested` and `DeliveryRequested`, while the next
@@ -216,9 +218,10 @@ object NativeLifecycleSpace : StateSpace<NativeLifecycleMachine.State, NativeLif
     // Rows follow `phases`, columns follow `inputs`. Generated from per-position attributes by a
     // throwaway script and then held to the machine cell by cell by the harness, so a cell that is
     // wrong fails the Space test rather than being trusted. Reading it:
-    //  - `Begin` is accepted only where the session has nothing unresolved, pending or active, and it
-    //    is a fresh request; `BeginRecovering` and `BeginAfterNoDispatch` only where exactly their
-    //    acknowledgement is pending; `BeginBothDecisions` and `BeginBlank` nowhere;
+    //  - `Begin` is accepted only where the session has nothing unresolved, nothing that still needs a
+    //    decision carried (an acknowledgement over an unknown outcome, or an undispatched proof) and no
+    //    active run, and it is a fresh request; `BeginRecovering` and `BeginAfterNoDispatch` only where
+    //    exactly their acknowledgement is pending; `BeginBothDecisions` and `BeginBlank` nowhere;
     //  - `Stop`, `Stopping`, `Stopped` and `Unavailable` are accepted wherever an attempt exists, and
     //    `Stop` and `Stopping` leave a stopped attempt's termination alone;
     //  - `Closed` is accepted where no attempt is unstopped, an empty store included;
@@ -255,10 +258,10 @@ object NativeLifecycleSpace : StateSpace<NativeLifecycleMachine.State, NativeLif
         /* ended-stopped-outcome-unknown                 */ "000001110100001110111101111",
         /* ended-stopped-succeeded                       */ "100001110100001000111101111",
         /* ended-stopped-failed                          */ "100001110100001000111101111",
-        /* ended-acknowledged-undelivered                */ "010001100100000000111101111",
+        /* ended-acknowledged-undelivered                */ "110001100100000000111101111",
         /* ended-acknowledged-outcome-unknown            */ "010001100100001000111101111",
-        /* ended-acknowledged-succeeded                  */ "010001100100001000111101111",
-        /* ended-acknowledged-failed                     */ "010001100100001000111101111",
+        /* ended-acknowledged-succeeded                  */ "110001100100001000111101111",
+        /* ended-acknowledged-failed                     */ "110001100100001000111101111",
         /* ended-stop-unconfirmed-delivered-acknowledged */ "000001100100001000111101011",
         /* closing-unstopped                             */ "000001100100000000111101011",
         /* closing-drained-run-active                    */ "000001110100001000111101111",
