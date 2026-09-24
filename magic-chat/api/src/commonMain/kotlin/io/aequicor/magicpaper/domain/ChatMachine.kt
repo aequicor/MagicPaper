@@ -312,7 +312,7 @@ object ChatMachine : Machine<ChatMachine.State, ChatMachine.Input, ChatMachine.E
             is Intent.Archive -> {
                 val session = state.sessions[input.sessionId] ?: return reject("Вопрос не найден")
                 when {
-                    input.archived && !historyMutable(state, session) -> reject("Дождитесь завершения запросов перед архивацией")
+                    input.archived && !archiveAllowed(state, session) -> reject("Дождитесь завершения запросов перед архивацией")
                     input.automatic && (!input.archived || input.at - maxOf(session.updatedAt, session.archiveRestoredAt ?: session.updatedAt) < ARCHIVE_DELAY) -> reject("Чат пока не готов к архивации")
                     else -> Transition(state.withSession(session.copy(archived = input.archived,
                         archiveRestoredAt = if (input.archived) session.archiveRestoredAt else input.at)))
@@ -476,6 +476,12 @@ object ChatMachine : Machine<ChatMachine.State, ChatMachine.Input, ChatMachine.E
     }
     private fun validReply(ref: RunRef, message: ChatMessage) = message.id == ref.responseId && message.role == ChatRole.AGENT
     private fun historyMutable(state: State, session: ChatSession) = session.id !in state.runs && session.pendingRun == null && session.queuedPrompts.isEmpty()
+    /** Archiving is allowed when no run is actively executing; terminal or unknown runs after a crash do not block it. */
+    private fun archiveAllowed(state: State, session: ChatSession): Boolean {
+        val run = state.runs[session.id]
+        val activeRun = run != null && run.phase in setOf(Phase.RUNNING, Phase.STOPPING, Phase.RECOVERING)
+        return !activeRun && session.queuedPrompts.isEmpty()
+    }
     private fun State.match(ref: RunRef): Run? = runs[ref.sessionId]?.takeIf { it.ref == ref }
     private fun State.withSession(session: ChatSession) = copy(sessions = sessions + (session.id to session))
     private fun State.withRun(run: Run) = copy(runs = runs + (run.ref.sessionId to run))

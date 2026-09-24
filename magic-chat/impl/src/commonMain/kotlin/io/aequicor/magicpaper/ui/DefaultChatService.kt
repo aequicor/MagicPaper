@@ -218,7 +218,7 @@ class DefaultChatService(
         try { dispatchChat(id, ChatMachine.Intent.Archive(id, archived, archiveClock(), automatic)) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            AppLog.error("chat", "session.archive.failed", mapOf("sessionId" to id) + ("causeType" to failure::class.simpleName.orEmpty()))
+            AppLog.error("chat", "session.archive.failed", mapOf("sessionId" to id, "causeType" to failure::class.simpleName.orEmpty(), "cause" to (failure.message ?: "")))
             if (!automatic) _state.update { it.copy(notice = "Не удалось изменить архив чата. Дождитесь завершения запроса и повторите попытку.") }
         }
     }
