@@ -82,8 +82,25 @@ internal class DesktopAgentPanel(
         /** The dock shows a recent window of the transcript, not the whole journal. */
         const val MAX_MESSAGES = 40
         const val MAX_MESSAGE_CHARS = 2000
+        /**
+         * Sessions that need the reader: they sort to the top of the rail and feed the tab's
+         * badge, the way an operator board puts blocked work first.
+         */
+        val NEEDS_YOU = setOf(
+            CodingSessionStatus.WAITING,
+            CodingSessionStatus.CONFIRMATION,
+            CodingSessionStatus.BLOCKED,
+        )
+        val RAIL_ORDER = listOf(
+            CodingSessionStatus.WAITING, CodingSessionStatus.CONFIRMATION, CodingSessionStatus.BLOCKED,
+            CodingSessionStatus.WORKING, CodingSessionStatus.UNREAD, CodingSessionStatus.NEEDS_TESTING,
+            CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED, CodingSessionStatus.IDLE,
+        )
         /** Horizontal margin that must be crossed before the panel re-anchors to the other edge. */
         const val EDGE_HYSTERESIS = 48
+        /** The expand/collapse morph: short enough to feel instant, long enough to read. */
+        const val BOUNDS_DURATION_MILLIS = 200_000_000.0
+        const val BOUNDS_STEP_MILLIS = 16
         /** Most urgent first: the dock shows one session, so it shows the one that needs the reader. */
         val URGENCY = listOf(
             CodingSessionStatus.WORKING,
@@ -122,6 +139,7 @@ internal class DesktopAgentPanel(
     private val selectedSessionId = MutableStateFlow<String?>(null)
 
     private var overlay: ComposeWindow? = null
+    private var boundsAnimation: javax.swing.Timer? = null
     /** Pointer offset from the window origin while dragging, in device pixels. */
     private var grab: Point? = null
     /** Fraction of the free edge height above the panel, so the place survives a resolution change. */
@@ -162,6 +180,8 @@ internal class DesktopAgentPanel(
 
     override fun close() {
         scope.cancel()
+        boundsAnimation?.stop()
+        boundsAnimation = null
         owner.removeWindowStateListener(stateListener)
         owner.removeWindowFocusListener(focusListener)
         overlay?.dispose()
@@ -185,7 +205,7 @@ internal class DesktopAgentPanel(
             val window = overlay ?: createOverlay().also { overlay = it }
             // Every appearance starts as the narrow tab: the panel grows only under the pointer.
             expanded.value = false
-            applyGeometry(window)
+            applyGeometry(window, animate = false)
             if (!window.isVisible) {
                 window.isVisible = true
                 AppLog.info("desktop_host", "agent.dock.shown", mapOf(
@@ -248,7 +268,7 @@ internal class DesktopAgentPanel(
     private fun setExpanded(value: Boolean) {
         if (expanded.value == value) return
         expanded.value = value
-        overlay?.let(::applyGeometry)
+        overlay?.let { applyGeometry(it, animate = snapshot.value?.animate == true) }
         AppLog.debug("desktop_host", "agent.dock.expansion", mapOf("expanded" to value.toString()))
     }
 
@@ -307,7 +327,7 @@ internal class DesktopAgentPanel(
      * are device pixels while the dock is laid out in dp: guessing here clips the composer at
      * 150 % scaling. Rounding up never clips; it can only leave a transparent pixel.
      */
-    private fun applyGeometry(window: ComposeWindow) {
+    private fun applyGeometry(window: ComposeWindow, animate: Boolean) {
         val usable = usableArea(window) ?: return
         val scale = configuration()?.defaultTransform?.scaleX ?: 1.0
         val open = expanded.value
@@ -318,7 +338,32 @@ internal class DesktopAgentPanel(
         val x = if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - width
         val lowest = (usable.y + usable.height - height).coerceAtLeast(usable.y)
         val y = (usable.y + ((usable.height - height) * offset).roundToInt()).coerceIn(usable.y, lowest)
-        window.setBounds(x, y, width, height)
+        applyBounds(window, Rectangle(x, y, width, height), animate)
+    }
+
+    /**
+     * Grow the window towards its next rectangle instead of teleporting: the compact tab and the
+     * expanded card read as one surface morphing, the way a live activity expands in place.
+     * Dragging and resizing stay immediate — a handle under the cursor must never lag it.
+     */
+    private fun applyBounds(window: ComposeWindow, target: Rectangle, animate: Boolean) {
+        boundsAnimation?.stop()
+        boundsAnimation = null
+        val from = window.bounds
+        if (!animate || from == target) {
+            window.bounds = target
+            return
+        }
+        val startedAt = System.nanoTime()
+        boundsAnimation = javax.swing.Timer(BOUNDS_STEP_MILLIS) { _ ->
+            val t = ((System.nanoTime() - startedAt) / BOUNDS_DURATION_MILLIS.toDouble() / 1_000_000.0)
+                .coerceIn(0.0, 1.0)
+            window.bounds = interpolateRect(from, target, easeOut(t))
+            if (t >= 1.0) {
+                boundsAnimation?.stop()
+                boundsAnimation = null
+            }
+        }.apply { start() }
     }
 
     /**
@@ -411,7 +456,7 @@ internal class DesktopAgentPanel(
             .coerceIn(PaperAgentDockMinSize, maxWidth)
         expandedHeight.value = (expandedHeight.value + (dyPx / scale).dp)
             .coerceIn(PaperAgentDockMinSize, maxHeight)
-        applyGeometry(window)
+        applyGeometry(window, animate = false)
     }
 
     // endregion
@@ -460,9 +505,13 @@ internal class DesktopAgentPanel(
         val selected = selectedSession(live, selectedId, ui.currentSessionId)
         val status = selected.status
         val waiting = status == CodingSessionStatus.WAITING
+        val now = System.currentTimeMillis()
         return Snapshot(
             model = PaperAgentDockModel(
-                sessions = live.map { session ->
+                sessions = live.sortedWith(
+                    compareBy<CodingSessionUi> { RAIL_ORDER.indexOf(it.status) }
+                        .thenByDescending { it.session.statusChangedAt },
+                ).map { session ->
                     PaperDockSession(
                         id = session.session.id,
                         // The sidebar's own title: a started session is listed by its short
@@ -471,11 +520,16 @@ internal class DesktopAgentPanel(
                         tone = session.status.activityTone,
                         running = session.running || session.draft.active,
                         selected = session.session.id == selected.session.id,
+                        activityLabel = session.activityLabel(),
+                        ageLabel = ageLabel(session.session.statusChangedAt, now),
+                        needsYou = session.status in NEEDS_YOU,
                     )
                 },
                 statusLabel = status.label,
                 messages = selected.dockMessages(settings.hideSystemSteps),
                 liveDetail = selected.liveDetail(),
+                pendingQuestion = selected.pendingQuestion(),
+                attentionCount = live.count { it.status in NEEDS_YOU || it.status == CodingSessionStatus.UNREAD },
                 busy = selected.running || selected.draft.active,
                 // A questionnaire is answered in the window that renders it; an input here
                 // would look like an answer and be discarded instead.
@@ -511,6 +565,25 @@ internal class DesktopAgentPanel(
         PaperActivityTone.NEEDS_TESTING -> "нужна проверка"
         PaperActivityTone.QUEUED -> "в очереди"
         PaperActivityTone.READY -> "свободен"
+    }
+
+    /** The row's key value: the question it waits on, else what it is doing right now. */
+    private fun CodingSessionUi.activityLabel(): String? {
+        pendingQuestion()?.takeIf { it.isNotBlank() }?.let { return it }
+        return liveDetail()
+    }
+
+    private fun CodingSessionUi.pendingQuestion(): String? =
+        interactions.firstOrNull()?.questions?.firstOrNull()?.title?.takeIf { it.isNotBlank() }
+
+    /** Age of the current state: a run's duration while working, a frozen span once done. */
+    private fun ageLabel(sinceMillis: Long, now: Long): String {
+        val seconds = ((now - sinceMillis) / 1000).coerceAtLeast(0)
+        return when {
+            seconds < 60 -> "$seconds с"
+            seconds < 3600 -> "${seconds / 60} мин"
+            else -> "${seconds / 3600} ч"
+        }
     }
 
     private fun CodingSessionUi.dockMessages(hideSystemSteps: Boolean): List<PaperDockMessage> = messages
@@ -561,4 +634,18 @@ internal class DesktopAgentPanel(
     }
 
     // endregion
+}
+
+/** Linear blend of two rectangles; [t] is already eased by the caller. */
+internal fun interpolateRect(from: Rectangle, to: Rectangle, t: Double): Rectangle {
+    val k = t.coerceIn(0.0, 1.0)
+    fun lerp(a: Int, b: Int) = (a + (b - a) * k).roundToInt()
+    return Rectangle(lerp(from.x, to.x), lerp(from.y, to.y),
+        lerp(from.width, to.width), lerp(from.height, to.height))
+}
+
+/** Cubic ease-out: the morph decelerates into its target instead of stopping dead. */
+internal fun easeOut(t: Double): Double {
+    val inv = 1 - t.coerceIn(0.0, 1.0)
+    return 1 - inv * inv * inv
 }

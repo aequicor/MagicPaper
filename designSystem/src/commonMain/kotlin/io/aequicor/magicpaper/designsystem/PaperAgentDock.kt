@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -140,6 +142,12 @@ public data class PaperDockSession(
     val tone: PaperActivityTone,
     val running: Boolean = false,
     val selected: Boolean = false,
+    /** The row's key value: what the session is doing right now, or the question it waits on. */
+    val activityLabel: String? = null,
+    /** How long the session has been in its current state: "3 мин", "2 ч". */
+    val ageLabel: String? = null,
+    /** The session needs the reader: it sorts to the top and feeds the tab's badge. */
+    val needsYou: Boolean = false,
 )
 
 /**
@@ -160,6 +168,10 @@ public data class PaperAgentDockModel(
      * instead of inviting input that would be discarded.
      */
     val inputPlaceholder: String = "Сообщение агенту…",
+    /** The question the selected session is waiting on; the dock surfaces it above the chat. */
+    val pendingQuestion: String? = null,
+    /** Sessions that need the reader: the collapsed tab's single glanceable number. */
+    val attentionCount: Int = 0,
     /** Identity of the shown session: switching sessions resets the transcript anchor. */
     val transcriptKey: Any? = null,
 )
@@ -328,7 +340,20 @@ private fun DockCollapsed(
             },
         contentAlignment = Alignment.Center,
     ) {
-        indicator()
+        // One glanceable column, Live-Activity style: how many sessions need the reader,
+        // above the workspace's aggregate state.
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)) {
+            if (model.attentionCount > 0) {
+                Box(Modifier.background(colors.action, CircleShape)
+                    .sizeIn(minWidth = 16.dp, minHeight = 16.dp)
+                    .padding(horizontal = 4.dp),
+                    contentAlignment = Alignment.Center) {
+                    PaperText("${model.attentionCount}", role = PaperTextRole.CHROME, color = colors.actionOn)
+                }
+            }
+            indicator()
+        }
     }
 }
 
@@ -402,6 +427,7 @@ private fun DockSessionList(
                 items(model.sessions, key = { it.id }) { session ->
                     PaperSessionRow(
                         title = session.name,
+                        subtitle = session.activityLabel ?: session.ageLabel,
                         onClick = { onSelectSession(session.id) },
                         selected = session.selected,
                         indicator = {
@@ -438,7 +464,13 @@ private fun DockConversation(
             Box(Modifier.heightIn(min = 24.dp), contentAlignment = Alignment.Center) { indicator() }
             Spacer(Modifier.width(spacing.xs))
             Column(Modifier.weight(1f)) {
-                PaperFadingText(model.statusLabel, style = LocalPaperTypography.current.chrome,
+                val selectedSession = model.sessions.firstOrNull { it.selected }
+                PaperFadingText(selectedSession?.name.orEmpty(),
+                    style = LocalPaperTypography.current.label, color = colors.text, marqueeOnHover = true)
+                PaperFadingText(
+                    listOfNotNull(model.statusLabel, selectedSession?.activityLabel,
+                        selectedSession?.ageLabel).joinToString(" · "),
+                    style = LocalPaperTypography.current.chrome,
                     color = colors.secondaryText, marqueeOnHover = true)
             }
             Spacer(Modifier.width(spacing.xs))
@@ -501,6 +533,15 @@ private fun ColumnScope.DockTranscript(
     // Follow-end scrolling is the design system's job: a growing answer must not throw the
     // reader back to the top of the message, and a reader who scrolled up keeps their place.
     val scroll = paperStickToBottom(listState, resetKey = model.transcriptKey)
+    model.pendingQuestion?.let { question ->
+        // The peek principle: what the session waits on sits above the history, not buried in it.
+        PaperPanel(Modifier.fillMaxWidth().padding(bottom = spacing.xs), kind = PaperSurfaceKind.RAISED) {
+            Column(Modifier.padding(spacing.xs)) {
+                PaperText("Ждёт вашего ответа", role = PaperTextRole.LABEL, color = colors.action)
+                PaperText(question, style = LocalPaperTypography.current.body, color = colors.text)
+            }
+        }
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.weight(1f).fillMaxWidth().paperChatScrollInput(scroll),

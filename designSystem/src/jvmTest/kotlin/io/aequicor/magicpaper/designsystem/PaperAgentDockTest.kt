@@ -207,6 +207,41 @@ class PaperAgentDockTest {
         } finally { onPaperUi { scene.close() } }
     }
 
+    @Test fun theTabCarriesOneGlanceableNumberAndRowsCarryTheirLiveValue() {
+        val frames = Frames()
+        val model = busyModel.copy(
+            attentionCount = 2,
+            sessions = sessions.map { it.copy(activityLabel = if (it.id == "s1") "Читает SessionOrganismStore.kt" else it.activityLabel, ageLabel = "3 мин") },
+            pendingQuestion = "double jump or wall climb?",
+        )
+        val collapsed = scene(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight) {
+            Dock(false, {}, model)
+        }
+        try {
+            frames.draw(collapsed)
+            onPaperUi {
+                assertTrue(collapsed.strings().any { it == "2" },
+                    "The collapsed tab shows how many sessions need the reader")
+                collapsed.capture(frames, "collapsed-badge")
+            }
+        } finally { onPaperUi { collapsed.close() } }
+        val expanded = scene(PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight) {
+            Dock(true, {}, model)
+        }
+        try {
+            frames.draw(expanded)
+            onPaperUi {
+                val strings = expanded.strings()
+                assertTrue(strings.any { "Читает SessionOrganismStore.kt" in it },
+                    "A row carries what its session is doing right now")
+                assertTrue(strings.any { "3 мин" in it }, "A row carries the age of its state")
+                assertTrue(strings.any { it == "Ждёт вашего ответа" }, "The pending question sits above the chat")
+                assertTrue(strings.any { "double jump or wall climb?" in it })
+                expanded.capture(frames, "expanded-anatomy")
+            }
+        } finally { onPaperUi { expanded.close() } }
+    }
+
     @Test fun theTranscriptMirrorsTheWindowKindsSystemNoticeReasoningToolCallsAndVerification() {
         val frames = Frames()
         val model = PaperAgentDockModel(
