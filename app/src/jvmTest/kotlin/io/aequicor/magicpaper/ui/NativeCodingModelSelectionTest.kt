@@ -108,6 +108,28 @@ class NativeCodingModelSelectionTest {
         } finally { Dispatchers.resetMain() }
     }
 
+    @Test fun newSessionStartsWithTheLastConversationsParameters() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val used = session.copy(researchMode = true, worktreeEnabled = false, mediaTools = SessionMediaTools(images = false))
+            val (f, service) = opened(stored = used)
+            service.selectNativeCodingModel(session.id, pick(astra, "ultra")); runCurrent()
+            val draft = assertNotNull(service.sessionCreationDraft(project.id))
+            draft.update(CodingEngine.CODEX); draft.awaitSaved()
+            var created: String? = null
+            service.createCodingSession(project.id) { created = it }
+            advanceUntilIdle()
+            val next = JsonCodingProjectRepository(f.kv, f.json).sessions(project.id).single { it.id == assertNotNull(created) }
+            assertEquals(pick(astra, "ultra"), next.codingModel)
+            assertEquals(CodingInteractionMode.RESEARCH, next.interactionMode)
+            assertFalse(next.worktreeEnabled)
+            assertEquals(native, next.featureFlags)
+            assertEquals(SessionMediaTools(images = false), next.mediaTools)
+            assertNull(service.state.value.coding.projects.single().codingModel, "the project default is not what carried the model over")
+            service.close()
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun imageIsRejectedByTheModelsOwnDeclarationBeforeAnythingIsSent() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

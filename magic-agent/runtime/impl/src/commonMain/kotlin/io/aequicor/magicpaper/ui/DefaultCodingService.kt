@@ -1289,11 +1289,19 @@ class DefaultCodingService(
             draft.awaitSaved()
             val project = repo.all().firstOrNull { it.id == projectId }
             check(project != null && projectId !in deletingCodingProjects.value) { "Project unavailable" }
+            val template = repo.sessions(projectId).lastConversation(_state.value.coding.currentSessionId)
             val session = CodingSession(id = Id.new(), projectId = projectId, name = "Новая сессия",
                 engine = point.value, createdAt = Id.now(),
                 codingModel = project.codingModel?.takeIf { it.engine == point.value },
                 modelSelection = project.modelSelection ?: ProfileResolver.favoriteDefault(
                     _state.value.settings, _state.value.availableLlmProfiles, coding = true))
+                .withParametersOf(template) { ProfileResolver.selection(it, _state.value.availableLlmProfiles)?.supportsCoding == true }
+            AppLog.debug("coding", "session.parameters.inherited", mapOf("projectId" to projectId,
+                "templateSessionId" to (template?.id ?: "none"), "reason" to when {
+                    template == null -> "no-conversation"
+                    template.id == _state.value.coding.currentSessionId -> "open-session"
+                    else -> "most-recent"
+                }))
             repo.dispatch(projectId, CodingMachine.Intent.CreateSession(session))
             // The entity now exists. A later cleanup/presentation failure must not invite another create.
             _state.update { it.copy(coding = it.coding.copy(
