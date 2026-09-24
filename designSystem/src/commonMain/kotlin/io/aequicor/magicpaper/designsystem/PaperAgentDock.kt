@@ -75,8 +75,9 @@ import kotlinx.coroutines.delay
  * The docked agent panel a host pins to a screen edge while its own window is away.
  *
  * Collapsed, it is a compact status list, the way a desktop agent monitor shows its agents:
- * one line per session with something to report, its dot, what it is doing and how long it
- * has been in that state. The dots are the sidebar's, so one session never reads as two
+ * one line per session with something to report, its dot, its name and what it is doing. The
+ * list leaves ages to the open panel, so the narrow list gives its width to the names. The dots
+ * are the sidebar's, so one session never reads as two
  * different states. Hovering expands it into the session rail, transcript and composer;
  * leaving retracts it. The host owns the window: it supplies the geometry, moves the window
  * on [onDragBy], follows [onCollapsedHeightChange] and decides when the dock is visible at all.
@@ -92,9 +93,10 @@ public val PaperAgentDockShadowMargin: Dp = 8.dp
 /**
  * Window footprints, shadow ring included: the host sizes its window from these, and the
  * visible card floats [PaperAgentDockShadowMargin] inside. The compact list keeps one width,
- * so its columns do not move while sessions come and go.
+ * so its columns do not move while sessions come and go, and only as much of it as a short
+ * session name and its activity need.
  */
-public val PaperAgentDockCollapsedWidth: Dp = 288.dp
+public val PaperAgentDockCollapsedWidth: Dp = 240.dp
 
 /**
  * Compact footprint to open with: the header and one session. The list then reports its real
@@ -194,8 +196,9 @@ public data class PaperDockSession(
     /** The session's own status, said when there is no [activityLabel] to show. */
     val statusLabel: String = "",
     /**
-     * When the session entered its current state, in epoch milliseconds: the dock counts the
-     * time from it against the host's `nowMillis`, so a waiting session's age keeps moving.
+     * When the session entered its current state, in epoch milliseconds: the open panel's header
+     * counts the selected session's time from it against the host's `nowMillis`, so a waiting
+     * session's age keeps moving.
      */
     val stateSinceMillis: Long? = null,
     /** The session needs the reader: it sorts to the top, is tinted and feeds the badge. */
@@ -235,8 +238,8 @@ public data class PaperAgentDockModel(
  * windows in (one dp is one AWT window unit on every display scale), so a host moves and sizes
  * its window with them directly.
  *
- * @param nowMillis the host's wall clock in epoch milliseconds; every session's age is counted
- *   from its [PaperDockSession.stateSinceMillis] against it. Zero hides the ages.
+ * @param nowMillis the host's wall clock in epoch milliseconds; the open panel counts the
+ *   selected session's age from its [PaperDockSession.stateSinceMillis] against it. Zero hides it.
  * @param onCollapsedHeightChange the window footprint height, shadow ring included, the compact
  *   list needs for its current rows at the current text scale.
  * @param expandDelayMillis hover dwell before expanding; a pointer crossing the list must not
@@ -395,7 +398,6 @@ public fun PaperAgentDock(
                 DockCompact(
                     model = model,
                     indicator = indicator,
-                    nowMillis = nowMillis,
                     drag = drag,
                     onOpen = {
                         // An explicit activation is not pointer-owned, so it survives having no pointer.
@@ -452,7 +454,6 @@ private fun DockCard(
 private fun DockCompact(
     model: PaperAgentDockModel,
     indicator: @Composable () -> Unit,
-    nowMillis: Long,
     drag: Modifier,
     onOpen: () -> Unit,
     onOpenSession: (String) -> Unit,
@@ -465,7 +466,7 @@ private fun DockCompact(
     Column(Modifier.fillMaxWidth().then(drag).padding(vertical = spacing.xxs)) {
         DockCompactHeader(model, indicator, onOpen)
         shown.forEach { session ->
-            key(session.id) { DockCompactRow(session, nowMillis, onOpenSession, onPointAt) }
+            key(session.id) { DockCompactRow(session, onOpenSession, onPointAt) }
         }
         val hidden = reporting.size - shown.size
         val footer = when {
@@ -526,14 +527,13 @@ private fun DockCompactHeader(
 }
 
 /**
- * One session: its dot, its name with the age of its state on the right, and below what it is
- * doing. A session that waits on the reader carries the attention tint across the whole row,
- * so a question can never hide among running work.
+ * One session: its dot, its name, and below what it is doing. A session that waits on the
+ * reader carries the attention tint across the whole row, so a question can never hide among
+ * running work.
  */
 @Composable
 private fun DockCompactRow(
     session: PaperDockSession,
-    nowMillis: Long,
     onOpenSession: (String) -> Unit,
     onPointAt: (String, Boolean) -> Unit,
 ) {
@@ -574,16 +574,7 @@ private fun DockCompactRow(
         }
         Spacer(Modifier.width(spacing.xs))
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PaperFadingText(session.name, Modifier.weight(1f), color = colors.text, style = chrome,
-                    marqueeOnHover = true)
-                session.elapsedLabel(nowMillis)?.let { elapsed ->
-                    Spacer(Modifier.width(spacing.xs))
-                    // Tabular figures keep the ticking age from shifting the title every second.
-                    PaperText(elapsed, style = chrome.copy(fontFeatureSettings = "tnum"),
-                        color = colors.secondaryText, maxLines = 1)
-                }
-            }
+            PaperFadingText(session.name, color = colors.text, style = chrome, marqueeOnHover = true)
             (session.activityLabel ?: session.statusLabel).takeIf { it.isNotBlank() }?.let { detail ->
                 PaperFadingText(detail, color = colors.secondaryText, style = chrome, marqueeOnHover = true)
             }
@@ -935,7 +926,7 @@ private val previewSessions = listOf(
     PaperDockSession("s4", "Старая задача", PaperActivityTone.READY, statusLabel = "ждёт запроса"),
 )
 
-@Preview(name = "Dock collapsed · status list", group = "Agent dock", widthDp = 288, heightDp = 200)
+@Preview(name = "Dock collapsed · status list", group = "Agent dock", widthDp = 240, heightDp = 200)
 @Composable
 public fun PaperAgentDockCollapsedPreview() = PaperTheme {
     PaperAgentDock(expanded = false, onExpandedChange = {},
@@ -945,7 +936,7 @@ public fun PaperAgentDockCollapsedPreview() = PaperTheme {
         indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 16.dp) })
 }
 
-@Preview(name = "Dock collapsed · overflow", group = "Agent dock", widthDp = 288, heightDp = 300)
+@Preview(name = "Dock collapsed · overflow", group = "Agent dock", widthDp = 240, heightDp = 300)
 @Composable
 public fun PaperAgentDockOverflowPreview() = PaperTheme {
     val many = (1..8).map { index ->

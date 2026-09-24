@@ -1,6 +1,9 @@
 package io.aequicor.magicpaper
 
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedWidth
+import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedHeight
+import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedWidth
 import java.awt.Rectangle
 import kotlin.math.roundToInt
 import kotlin.test.Test
@@ -88,8 +91,8 @@ class AgentDockBoundsTest {
         val usable = Rectangle(1512, 0, 1920, 1050)
         for (edge in DockEdge.values()) for (step in 0..10) {
             val offset = step / 10f
-            val compact = dockBounds(usable, 288.dp, 210.dp, edge, offset)
-            val open = dockBounds(usable, 448.dp, 476.dp, edge, offset)
+            val compact = dockBounds(usable, PaperAgentDockCollapsedWidth, 210.dp, edge, offset)
+            val open = dockBounds(usable, PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight, edge, offset)
             assertTrue(open.contains(compact), "$edge at $offset: $open does not cover $compact")
         }
     }

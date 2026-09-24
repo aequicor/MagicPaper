@@ -100,8 +100,8 @@ class PaperAgentDockTest {
                 for (session in sessions) assertTrue(session.name in texts, "The list names ${session.name}: $texts")
                 assertFalse(quiet.name in texts, "A quiet session is left to the open panel's rail")
                 assertTrue("MagicPaper" in texts, "The header names the workspace")
-                assertTrue("3:31" in texts && "0:42" in texts && "1:04:09" in texts,
-                    "Every row counts the age of its state: $texts")
+                assertTrue(texts.none { it in setOf("3:31", "0:42", "1:04:09") },
+                    "The narrow list gives its width to names; ages belong to the open panel: $texts")
                 assertTrue("Ждём вашего ответа" in texts, "A row without live activity says its status")
                 val header = scene.action("Открыть панель агента")
                 assertTrue(header.config.getOrNull(SemanticsProperties.ContentDescription)!!

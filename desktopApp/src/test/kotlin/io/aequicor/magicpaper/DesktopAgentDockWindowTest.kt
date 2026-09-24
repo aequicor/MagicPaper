@@ -23,7 +23,7 @@ class DesktopAgentDockWindowTest {
         try {
             SwingUtilities.invokeAndWait {
                 window = dockWindow().apply {
-                    setBounds(40, 80, 288, 180)
+                    setBounds(40, 80, 240, 180)
                     isVisible = true
                 }
             }
