@@ -49,13 +49,18 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 
 /** Shared reading measure and message geometry; lazy fragments keep their own identity. */
 @Composable
-public fun Modifier.paperConversationMessage(user: Boolean, first: Boolean, last: Boolean): Modifier {
+public fun Modifier.paperConversationMessage(user: Boolean, first: Boolean, last: Boolean,
+    selected: Boolean = false): Modifier {
     val shape = RoundedCornerShape(
         topStart = if (first) 12.dp else 0.dp, topEnd = if (first) 12.dp else 0.dp,
         bottomStart = if (last) 12.dp else 0.dp, bottomEnd = if (last) 12.dp else 0.dp,
     )
     return this.shadow(if (first && last) 2.dp else 0.dp, shape).clip(shape)
-        .background(if (user) LocalPaperColors.current.userMessageSurface else LocalPaperColors.current.agentMessageSurface)
+        .background(when {
+            selected -> LocalPaperColors.current.selected
+            user -> LocalPaperColors.current.userMessageSurface
+            else -> LocalPaperColors.current.agentMessageSurface
+        })
         .padding(horizontal = 12.dp, vertical = 0.dp)
         .padding(top = if (first) (if (user) 8.dp else 4.dp) else 0.dp,
             bottom = if (last) (if (user) 8.dp else 4.dp) else 0.dp)

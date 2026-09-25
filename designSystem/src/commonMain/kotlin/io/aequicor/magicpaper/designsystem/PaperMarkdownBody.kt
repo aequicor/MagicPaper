@@ -1,8 +1,10 @@
 package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
@@ -12,6 +14,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -23,11 +27,17 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -173,11 +183,18 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
 @Composable
 public fun PaperSelectedMessageSource(source: String, modifier: Modifier = Modifier,
     style: androidx.compose.ui.text.TextStyle = LocalPaperTypography.current.body, onDismiss: () -> Unit) {
+    PaperSelectedSourceField(source, modifier, style, VisualTransformation.None, onDismiss)
+}
+
+@Composable
+private fun PaperSelectedSourceField(source: String, modifier: Modifier, style: androidx.compose.ui.text.TextStyle,
+    transformation: VisualTransformation, onDismiss: () -> Unit) {
     var value by remember(source) { mutableStateOf(TextFieldValue(source, TextRange(0, source.length))) }
     val focus = remember { FocusRequester() }
     var hadFocus by remember { mutableStateOf(false) }
     BasicTextField(value = value, onValueChange = { value = it.copy(text = source) }, readOnly = true,
-        textStyle = style, modifier = modifier.fillMaxWidth().focusRequester(focus)
+        textStyle = style, visualTransformation = transformation,
+        modifier = modifier.fillMaxWidth().focusRequester(focus)
             .onFocusChanged { state ->
                 if (state.isFocused) hadFocus = true else if (hadFocus) onDismiss()
             }.onPreviewKeyEvent { event ->
@@ -187,4 +204,24 @@ public fun PaperSelectedMessageSource(source: String, modifier: Modifier = Modif
                 } else false
             })
     LaunchedEffect(focus) { focus.requestFocus() }
+}
+
+/** Keeps the complete text selected for Copy without replacing the rendered message rows. */
+@Composable
+public fun PaperMessageSelectionAnchor(source: String, onDismiss: () -> Unit) {
+    // The clipboard uses the original value; layout sees only one glyph even for large tool output.
+    val transformation = remember(source.length) {
+        object : VisualTransformation {
+            override fun filter(text: AnnotatedString): TransformedText = TransformedText(
+                AnnotatedString(if (source.isEmpty()) "" else " "),
+                object : OffsetMapping {
+                    override fun originalToTransformed(offset: Int): Int = if (offset == 0) 0 else 1
+                    override fun transformedToOriginal(offset: Int): Int = if (offset == 0) 0 else source.length
+                },
+            )
+        }
+    }
+    Box(Modifier.size(1.dp).clipToBounds().alpha(0f).semantics { hideFromAccessibility() }) {
+        PaperSelectedSourceField(source, Modifier, LocalPaperTypography.current.body, transformation, onDismiss)
+    }
 }
