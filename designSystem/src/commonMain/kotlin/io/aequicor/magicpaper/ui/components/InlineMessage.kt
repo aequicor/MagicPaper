@@ -62,7 +62,7 @@ class PaperInlineMessageParts internal constructor(
         val shared = LocalPaperMessageSelectionOwner.current
         val content: @Composable () -> Unit = {
             if (selectedIndex >= 0) {
-                if (selectedIndex == index) PaperMarkdownSelectedSource(source, style = style.copy(color = color)) { selectedIndex = -1 }
+                if (selectedIndex == index) PaperSelectedMessageSource(source, style = style.copy(color = color)) { selectedIndex = -1 }
             } else {
                 // Lazy fragments already bound visible work. Preserve selection/layout rather
                 // than rebuilding the text tree at both ends of every scroll gesture.

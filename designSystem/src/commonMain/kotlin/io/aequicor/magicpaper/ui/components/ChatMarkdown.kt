@@ -13,9 +13,10 @@ import org.intellij.markdown.ast.ASTNode
 @Composable
 fun PaperChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = false, streaming: Boolean = false,
     scrollable: Boolean = false) {
+    val selectWholeMessage = LocalPaperWholeMessageSelection.current
     var selectingAll by remember(text) { mutableStateOf(false) }
     if (selectingAll) {
-        PaperMarkdownSelectedSource(text, modifier, if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body) {
+        PaperSelectedMessageSource(text, modifier, if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body) {
             selectingAll = false
         }
         return
@@ -28,12 +29,13 @@ fun PaperChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Bool
     }
     if (scrollable) {
         MarkdownDocumentBody(document, document.blocks, modifier, compact, lazy = true, followEnd = true,
-            onSelectAll = { selectingAll = true })
+            selectable = !selectWholeMessage, onSelectAll = { selectingAll = true })
     } else {
         PaperMessagePreview(text, text.length > MESSAGE_PREVIEW_CHARS || document.preview.size < document.blocks.size, modifier, preview = {
-            MarkdownDocumentBody(document, document.preview, Modifier, compact, onSelectAll = { selectingAll = true })
+            MarkdownDocumentBody(document, document.preview, Modifier, compact,
+                selectable = !selectWholeMessage, onSelectAll = { selectingAll = true })
         }, reader = { readerModifier -> MarkdownDocumentBody(document, document.blocks, readerModifier, compact,
-            onSelectAll = { selectingAll = true }) })
+            selectable = !selectWholeMessage, onSelectAll = { selectingAll = true }) })
     }
 }
 

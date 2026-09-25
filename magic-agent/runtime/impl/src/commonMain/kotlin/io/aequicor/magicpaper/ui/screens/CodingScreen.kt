@@ -7,6 +7,7 @@ import io.aequicor.magicpaper.designsystem.PaperWorkspaceHeading
 import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
 import io.aequicor.magicpaper.designsystem.PaperPromptField
 import io.aequicor.magicpaper.designsystem.PaperWorkSurface
+import io.aequicor.magicpaper.designsystem.PaperSelectedMessageSource
 import io.aequicor.magicpaper.designsystem.PaperTreeGroupHeader
 import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.domain.tools.ToolPhase
@@ -14,6 +15,7 @@ import io.aequicor.magicpaper.domain.tools.ToolPhase
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import io.aequicor.magicpaper.ui.components.PaperInlineMessageParts
 import io.aequicor.magicpaper.ui.components.PaperMessageSelectionContainer
+import io.aequicor.magicpaper.ui.components.PaperMessageSelectionTarget
 import io.aequicor.magicpaper.ui.components.PaperMessageExpansion
 import io.aequicor.magicpaper.ui.components.LocalPaperMessageExpansion
 import io.aequicor.magicpaper.ui.components.rememberPaperInlineMessageParts
@@ -1040,8 +1042,29 @@ internal fun CodingChat(
             else (0 until parts.size).map { CodingMessageFragment(item, parts, it) }
         }
     }
-    val pinIndices = remember(fragments) {
-        buildMap { fragments.forEachIndexed { index, fragment ->
+    var selectedResponse by remember(session.session.id) { mutableStateOf<SelectedCodingResponse?>(null) }
+    val selectedAgentMessageId = selectedResponse?.messageId
+    val selectedRow = selectedAgentMessageId?.let { id -> timeline.firstOrNull {
+        it.row.message.id == id && it.row.message.role == CodingRole.AGENT
+    }?.row }
+    val selectedText = remember(selectedRow) {
+        selectedRow?.let { row ->
+            listOfNotNull(row.message.fullCopyText(), row.planCard?.fullCopyText())
+                .filter { it.isNotBlank() }.joinToString("\n\n")
+        }
+    }
+    val selectedAnchorKey = selectedResponse?.let { selection ->
+        selection.anchorKey.takeIf { anchor -> fragments.any {
+            it.key == anchor && it.item.row.message.id == selection.messageId
+        } } ?: fragments.firstOrNull { it.item.row.message.id == selection.messageId }?.key
+    }
+    val visibleFragments = remember(fragments, selectedAgentMessageId, selectedAnchorKey) {
+        if (selectedAnchorKey == null) fragments else fragments.filter { fragment ->
+            fragment.item.row.message.id != selectedAgentMessageId || fragment.key == selectedAnchorKey
+        }
+    }
+    val pinIndices = remember(visibleFragments) {
+        buildMap { visibleFragments.forEachIndexed { index, fragment ->
             if (fragment.item.first && fragment.index == 0) put(fragment.item.row.message.id, index + 1)
         } }
     }
@@ -1091,7 +1114,7 @@ internal fun CodingChat(
                         "${project.name}  /  ${session.session.interactionMode.title}")
                     onForkSession?.let { action -> ForkSessionAction(true) { action(null) } }
                 }
-                items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
+                items(visibleFragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
                     val item = fragment.item
                     val row = item.row
                     val message = row.message
@@ -1102,9 +1125,13 @@ internal fun CodingChat(
                         pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
                         live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
                         continued = isDraft && busy, fragment = fragment,
+                        selectedText = selectedText.takeIf { message.id == selectedAgentMessageId },
+                        onSelectionDismiss = { selectedResponse = null },
+                        onSelectAll = if (message.role == CodingRole.AGENT && !message.systemContext && !message.systemNotice)
+                            ({ selectedResponse = SelectedCodingResponse(message.id, fragment.key) }) else null,
                         onExpand = { expandedMessages = expandedMessages + item.key },
                         onCollapse = {
-                            scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
+                            scroll.preserveCollapsedItem(item.key, visibleFragments.indexOfFirst { it.item.key == item.key } + 1)
                             expandedMessages = expandedMessages - item.key
                         }, actions = if (isDraft || message.systemContext || message.systemNotice) null else {
                             { record ->
@@ -1223,6 +1250,8 @@ internal fun CodingChat(
     }
 }
 
+private data class SelectedCodingResponse(val messageId: String, val anchorKey: String)
+
 private data class CodingMessageFragment(
     val item: io.aequicor.magicpaper.ui.components.CodingHistoryItem,
     val parts: PaperInlineMessageParts? = null,
@@ -1259,6 +1288,9 @@ private fun SavedCodingHistoryItem(
     live: Boolean = false,
     continued: Boolean = false,
     fragment: CodingMessageFragment = CodingMessageFragment(item),
+    selectedText: String? = null,
+    onSelectionDismiss: () -> Unit = {},
+    onSelectAll: (() -> Unit)? = null,
     onExpand: () -> Unit = {},
     onCollapse: () -> Unit = {},
     actions: (@Composable (CodingMessage) -> Unit)? = null,
@@ -1266,7 +1298,12 @@ private fun SavedCodingHistoryItem(
     val row = item.row
     val message = row.message
     PaperChatScrollItem(scroll, fragment.key) {
-        CompositionLocalProvider(LocalPaperMessageExpansion provides if (fragment.parts == null) PaperMessageExpansion(item.expandableText(), onExpand) else null) {
+        PaperMessageSelectionTarget(onSelectAll) {
+            if (selectedText != null) {
+                CodingMessageBubble(message, first = true, last = true, forceWidth = true, showFooter = false,
+                    body = { PaperSelectedMessageSource(selectedText, onDismiss = onSelectionDismiss) }) {}
+            } else CompositionLocalProvider(LocalPaperMessageExpansion provides
+                if (fragment.parts == null) PaperMessageExpansion(item.expandableText(), onExpand) else null) {
             CodingMessageBubble(message, step = item.step, first = item.first && fragment.first,
                 last = item.last && fragment.last && !continued, live = live,
                 body = fragment.parts?.let { parts -> {
@@ -1319,6 +1356,7 @@ private fun SavedCodingHistoryItem(
                 OrchestrationMessageInputStatus(message, session.id, planningService, planningState)
                 if (message.pendingDelivery) PaperText("Ожидает передачи после текущего хода", style = LocalPaperTypography.current.label)
                 actions?.invoke(message)
+            }
             }
         }
     }

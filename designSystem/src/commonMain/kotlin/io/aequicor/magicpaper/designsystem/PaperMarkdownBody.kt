@@ -74,7 +74,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
     val bodyStyle = if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body
     var selectingAll by remember(document.source) { mutableStateOf(false) }
     if (selectingAll) {
-        PaperMarkdownSelectedSource(document.source, modifier, bodyStyle) { selectingAll = false }
+        PaperSelectedMessageSource(document.source, modifier, bodyStyle) { selectingAll = false }
         return
     }
     val reading = LocalPaperResearchReading.current && !compact
@@ -171,7 +171,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
  * A read-only text field supplies native selection and copy for the complete source,
  * including blocks that a lazy renderer has not composed. */
 @Composable
-internal fun PaperMarkdownSelectedSource(source: String, modifier: Modifier = Modifier,
+public fun PaperSelectedMessageSource(source: String, modifier: Modifier = Modifier,
     style: androidx.compose.ui.text.TextStyle = LocalPaperTypography.current.body, onDismiss: () -> Unit) {
     var value by remember(source) { mutableStateOf(TextFieldValue(source, TextRange(0, source.length))) }
     val focus = remember { FocusRequester() }
