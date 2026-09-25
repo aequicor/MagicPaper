@@ -515,6 +515,22 @@ class GitTaskWorkspaceTest {
         assertFalse(port(checks = unavailable).availability(project).available)
     } }
 
+    @Test fun anotherSessionsCheckTemporarilyBlocksAvailabilityWithoutPoisoningIt() = runTest { fixture {
+        var busy = true
+        val occupied = object : CommandChecks by gitChecks {
+            override suspend fun run(command: CheckCommand): CheckResult {
+                if (busy && command.policy == CheckPolicy.GIT_READ_ONLY) throw CheckResourceBusy()
+                return gitChecks.run(command)
+            }
+        }
+        val workspace = port(checks = occupied)
+        val unavailable = workspace.availability(project)
+        assertFalse(unavailable.available)
+        assertEquals(CheckResourceBusy().message, unavailable.reason)
+        busy = false
+        assertTrue(workspace.availability(project).available)
+    } }
+
     @Test fun concurrentDestinationChangesAreIntegratedWithoutLosingEitherSide() = runTest { fixture {
         val task = open()
         File(task.path).resolve("task.txt").writeText("task")

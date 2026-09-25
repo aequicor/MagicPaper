@@ -85,6 +85,10 @@ class GitTaskWorkspace(
             // A sandbox probe failure marks checks unavailable for this visit; restoring the
             // session list must survive it, not just the check that first discovers it.
             return@reading WorktreeAvailability(false, "Проверка Git временно недоступна")
+        } catch (busy: CheckResourceBusy) {
+            // Another session may be checking a sibling worktree that shares Git storage.
+            // A clean status does not release that resource; this read can be tried again later.
+            return@reading WorktreeAvailability(false, busy.message)
         }
         WorktreeAvailability(true)
     }
