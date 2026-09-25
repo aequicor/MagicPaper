@@ -51,7 +51,8 @@ class DesktopResearchPageBrowser internal constructor(
 
         suspend fun open() = withContext(dispatcher) {
             driver = create()
-            browser = launch(checkNotNull(driver))
+            browser = try { launchManagedChromium(launch = { launch(checkNotNull(driver)) }) }
+            catch (failure: BrowserInstallFailed) { throw ResearchBrowserUnavailable(failure.message.orEmpty()).also { it.initCause(failure) } }
             context = checkNotNull(browser).newContext(Browser.NewContextOptions().setAcceptDownloads(false))
             page = checkNotNull(context).newPage().also { target ->
                 target.setDefaultTimeout(10_000.0)

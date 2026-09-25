@@ -12,6 +12,12 @@ internal class BrowserAvailability {
         failure?.let { throw ToolStateRejection(it) }
         try { return block() }
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (install: BrowserInstallFailed) {
+            // A failed download may succeed in a later run after connectivity changes.
+            AppLog.error("coding.browser", "install.unavailable", mapOf("phase" to phase,
+                "causeType" to install.javaClass.simpleName, "result" to "retry_next_run"))
+            throw ToolStateRejection(install.message.orEmpty()).also { it.initCause(install) }
+        }
         catch (error: Exception) {
             val message = "Встроенный браузер недоступен. Исправьте установку Chromium/Playwright и перезапустите MagicPaper. " +
                 "Повторный вызов в этом запуске не поможет. Не меняйте выбранный пользователем способ работы без его согласия."

@@ -51,7 +51,7 @@ internal class BrowserToolSession(
     private fun browserContext(): BrowserContext {
         context?.let { return it }
         val driver = playwright ?: availability.start("driver") { createPlaywright() }.also { playwright = it }
-        val instance = browser ?: availability.start("chromium") { launch(driver) }.also { browser = it }
+        val instance = browser ?: availability.start("chromium") { launchManagedChromium(launch = { launch(driver) }) }.also { browser = it }
         return instance.newContext(Browser.NewContextOptions().setAcceptDownloads(false)).also { created ->
             created.setDefaultTimeout(15_000.0)
             created.setDefaultNavigationTimeout(30_000.0)

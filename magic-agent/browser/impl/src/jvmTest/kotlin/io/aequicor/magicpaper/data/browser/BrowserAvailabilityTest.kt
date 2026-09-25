@@ -6,6 +6,17 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class BrowserAvailabilityTest {
+    @Test fun failedInstallationCanBeRetriedInALaterRun() {
+        val availability = BrowserAvailability()
+        repeat(2) {
+            val error = assertFailsWith<ToolStateRejection> {
+                availability.start("chromium") { throw BrowserInstallFailed("Проверьте подключение") }
+            }
+            assertContains(error.message.orEmpty(), "Проверьте подключение")
+            assertTrue(availability.available)
+        }
+    }
+
     @Test fun failedStartupIsNotRetriedAndLaterSessionsDoNotAdvertiseTools() = runBlocking {
         val availability = BrowserAvailability()
         var attempts = 0
