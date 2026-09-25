@@ -70,7 +70,8 @@ class CodingModelsTest {
         assertEquals("по умолчанию: extra", claude.levelLabel(null))
         assertEquals("ultracode", claude.levelLabel("ultracode"))
         val selection = CodingModelSelection(CodingEngine.CLAUDE_CODE, "anthropic", "opus", "ultracode")
-        assertEquals(EffortSelection.of(ReasoningEffort.XHIGH), selection.displayEffort(), "ultracode runs at xhigh effort")
+        assertEquals(EffortSelection.of(ReasoningEffort.ULTRACODE), selection.displayEffort(),
+            "the native selection keeps ultracode distinct from xhigh and max")
         assertEquals("extra", ReasoningPresets.CLAUDE_CODE_EFFORT.levelName(ReasoningEffort.XHIGH))
         assertEquals("xhigh", ReasoningPresets.OPENAI_EFFORT.levelName(ReasoningEffort.XHIGH), "other vendors keep the scale's name")
     }

@@ -63,6 +63,13 @@ class ClaudeCodeSubscriptionTest {
         assertContains(request.input.first().jsonObject["text"]!!.jsonPrimitive.content, "Пользователь: Какая погода?")
     }
 
+    @Test fun selectedUltracodeReachesTheClaudeCommandWithoutBecomingMax() = runBlocking {
+        val adapter = Adapter { "Готово." }
+        val selected = profile.withEffortFor("opus", EffortSelection.of(ReasoningEffort.ULTRACODE))
+        ClaudeCodeSubscription(adapter).complete(selected, messages)
+        assertEquals("ultracode", adapter.requests.single().effort)
+    }
+
     @Test fun aContinuationIsRefusedBecauseThisTransportNeverReturnsACall() = runBlocking {
         val exchange = LlmToolExchange(LlmToolTurn(provider = ProviderType.ANTHROPIC), emptyList())
         assertFailsWith<LlmToolProtocolException> { ClaudeCodeSubscription(Adapter { "" }).turn(profile, messages, listOf(tool), listOf(exchange)) }
@@ -82,8 +89,8 @@ class ClaudeCodeSubscriptionTest {
         assertEquals(listOf("haiku", "opus"), models.map { it.id })
         assertFalse(models.single { it.id == "haiku" }.supportsEffort, "A model without levels takes none")
         val opus = assertIs<ReasoningCapability.Controls>(models.single { it.id == "opus" }.reasoning)
-        assertEquals(setOf(ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX, ReasoningEffort.XHIGH), opus.values,
-            "A plain answer has no workflows, so ultracode is offered as the xhigh effort it runs at")
+        assertEquals(setOf(ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX, ReasoningEffort.ULTRACODE), opus.values,
+            "The subscription keeps max and ultracode as separate CLI choices")
         assertEquals(ReasoningEffort.HIGH, opus.default, "The model's own effort is the default")
         assertEquals("extra", opus.levelName(ReasoningEffort.XHIGH), "xhigh is named as Claude's picker names it")
         val fact = checkNotNull(models.single { it.id == "opus" }.metadata)

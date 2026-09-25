@@ -26,7 +26,7 @@ class ClaudeCodeSubscription(private val agent: NativeAgentAdapter) : ClaudeSubs
     override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> {
         require(profile.provider == ProviderType.ANTHROPIC_SUBSCRIPTION)
         val catalog = checkNotNull(agent.models) { "Claude Code does not declare its models" }.models()
-        // A plain answer runs without the Workflow tool, so the catalog's ultracode here is only its xhigh effort.
+        // Preserve the CLI's distinct max and ultracode choices in profiles and chat requests.
         val declared = catalog.associate { model ->
             val efforts = model.levels.mapNotNull(ReasoningEffort::fromWire).toSet()
             model.id to if (efforts.isEmpty()) DeclaredReasoning.None

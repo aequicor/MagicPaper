@@ -78,16 +78,20 @@ internal object ClaudeCommand {
         "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 
     /**
-     * One plain answer on the subscription: the conversation arrives as a stream-json user message on stdin, only the
-     * web tools exist, and neither the user's settings, MCP servers, commands nor a saved session take part.
+     * One answer on the subscription: the conversation arrives as a stream-json user message on stdin. Web tools
+     * are available, and an explicit ultracode choice also enables Claude's Workflow tool. The user's settings,
+     * MCP servers, commands and saved sessions take no part.
      */
     fun completion(executable: String, modelId: String, effort: String?, systemPrompt: String): ClaudeLaunch = ClaudeLaunch(buildList {
         add(executable)
         addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
         addAll(listOf("--model", modelId))
+        val ultracode = effort?.let(ReasoningEffort::fromWire) == ReasoningEffort.ULTRACODE
         effort?.let(ReasoningEffort::fromWire)?.let(::effortName)?.let { addAll(listOf("--effort", it)) }
+        if (ultracode) addAll(listOf("--settings", ULTRACODE_SETTINGS))
         addAll(listOf("--system-prompt-file", systemPrompt))
-        addAll(listOf("--tools", WEB_TOOLS.joinToString(","), "--allowedTools", WEB_TOOLS.joinToString(",")))
+        val tools = if (ultracode) WEB_TOOLS + "Workflow" else WEB_TOOLS
+        addAll(listOf("--tools", tools.joinToString(","), "--allowedTools", tools.joinToString(",")))
         addAll(listOf("--permission-mode", "dontAsk", "--strict-mcp-config", "--setting-sources", ""))
         addAll(listOf("--no-session-persistence", "--disable-slash-commands"))
     }, emptyMap(), SUBSCRIPTION_OVERRIDES)
@@ -98,7 +102,12 @@ internal object ClaudeCommand {
             add(executable)
             addAll(listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"))
             addAll(listOf("--model", request.profile.modelId))
-            val ultracode = request.session.codingModel?.takeIf { it.engine == CodingEngine.CLAUDE_CODE }?.level == ULTRACODE
+            val nativeChoice = request.session.codingModel
+            val ultracode = when (nativeChoice?.engine) {
+                CodingEngine.CLAUDE_CODE -> nativeChoice.level == ULTRACODE
+                null -> request.profile.effort.level == ReasoningEffort.ULTRACODE
+                else -> false
+            }
             val effort = if (ultracode) effortName(ReasoningEffort.XHIGH) else request.profile.effort.level?.let(::effortName)
             effort?.let { addAll(listOf("--effort", it)) }
             // A read-only run is not offered the Workflow tool, so there ultracode can only mean its xhigh effort.
@@ -146,6 +155,7 @@ internal object ClaudeCommand {
         ReasoningEffort.HIGH -> "high"
         ReasoningEffort.XHIGH -> "xhigh"
         ReasoningEffort.MAX -> "max"
+        ReasoningEffort.ULTRACODE -> "xhigh"
         ReasoningEffort.AUTO -> null
     }
 

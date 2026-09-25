@@ -7,10 +7,13 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.ReasoningCapability
+import io.aequicor.magicpaper.domain.ReasoningEffort
+import io.aequicor.magicpaper.domain.ReasoningPresets
 import io.aequicor.magicpaper.domain.levelName
 import io.aequicor.magicpaper.domain.resolveEffort
 import io.aequicor.magicpaper.domain.selectableLevels
@@ -19,7 +22,8 @@ import io.aequicor.magicpaper.designsystem.*
 /**
  * Управление усилием по возможностям конкретной модели: чип `default` и только
  * те уровни, которые модель объявила ([selectableLevels]). Имена — привычные
- * для других агентов: `off/min/low/medium/high/xhigh/max/auto`, либо вендорские,
+ * для других агентов: `off/min/low/medium/high/xhigh/max/auto`, либо вендорские
+ * (`extra/ultracode` у Claude Code),
  * если модель их объявила ([levelName]).
  * Слайдера нет: провайдеры принимают дискретные значения, а не числа.
  *
@@ -88,4 +92,18 @@ private fun EffortChip(
             if (effective) "$title →" else title,
         modifier = Modifier.padding(0.dp),
     )
+}
+
+@Preview(name = "Claude Opus · max", group = "Effort control", widthDp = 390, heightDp = 180)
+@Composable
+internal fun ClaudeMaxEffortPreview() {
+    PaperTheme { PaperSurface { renderEffortControl(ReasoningPresets.CLAUDE_CODE_EFFORT,
+        EffortSelection.of(ReasoningEffort.MAX), {}) } }
+}
+
+@Preview(name = "Claude Opus · ultracode · 200% text", group = "Effort control", widthDp = 390, heightDp = 280, fontScale = 2f)
+@Composable
+internal fun ClaudeUltracodeEffortPreview() {
+    PaperTheme { PaperSurface { renderEffortControl(ReasoningPresets.CLAUDE_CODE_EFFORT,
+        EffortSelection.of(ReasoningEffort.ULTRACODE), {}) } }
 }

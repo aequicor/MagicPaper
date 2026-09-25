@@ -24,7 +24,8 @@ import kotlin.math.abs
  */
 /**
  * Имена уровней — те же слова, что показывают другие агенты (pi, Cherry Studio,
- * Hermes, Codex): `off/minimal/low/medium/high/xhigh/max`, плюс `auto` и
+ * Hermes, Codex): `off/minimal/low/medium/high/xhigh/max`, плюс Claude Code
+ * `ultracode`, `auto` и
  * `default`. Русское [label] — пояснение к имени, а не замена ему: пользователь
  * приходит из других инструментов и ищет привычные слова.
  */
@@ -35,7 +36,8 @@ enum class ReasoningEffort(val wire: String, val label: String, val shortLabel: 
     MEDIUM("medium", "Среднее (medium)", "medium"),
     HIGH("high", "Высокое (high)", "high"),
     XHIGH("xhigh", "Очень высокое (xhigh)", "xhigh"),
-    MAX("max", "Максимум (max / ultra)", "max"),
+    MAX("max", "Максимум (max)", "max"),
+    ULTRACODE("ultracode", "Ultracode", "ultracode"),
 
     /** «Реши сама» — режим, а не интенсивность: в шкалу не входит. */
     AUTO("auto", "Авто — уровень выбирает модель (auto)", "auto"),
@@ -44,7 +46,7 @@ enum class ReasoningEffort(val wire: String, val label: String, val shortLabel: 
     companion object {
 
         /** Шкала интенсивности от слабого к сильному; AUTO — вне шкалы (это режим). */
-        val LADDER: List<ReasoningEffort> = listOf(NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX)
+        val LADDER: List<ReasoningEffort> = listOf(NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX, ULTRACODE)
 
         /** Позиция уровня на шкале; для AUTO — позиция его смыслового аналога. */
         fun rank(effort: ReasoningEffort): Int = when (effort) {
@@ -63,8 +65,6 @@ enum class ReasoningEffort(val wire: String, val label: String, val shortLabel: 
                 "min", "minimum" -> MINIMAL
                 "med", "mid", "middle" -> MEDIUM
                 "x_high", "extrahigh", "extra_high" -> XHIGH
-                // Claude Code: ultracode — это xhigh плюс оркестрация workflow, по усилию он равен xhigh.
-                "ultracode" -> XHIGH
                 "ultra", "maximum", "highest" -> MAX
                 "dynamic" -> AUTO
                 else -> null
@@ -400,11 +400,12 @@ object ReasoningPresets {
     )
 
     /**
-     * Claude Code `--effort`: уровень выбирает сам CLI, если не задан; выключить мышление нельзя.
-     * В `--effort` уходит `xhigh`, а пикер Claude называет этот уровень «Extra».
+     * Claude Code: `max` and `ultracode` are separate choices. The latter starts
+     * `xhigh` effort with the CLI's workflow setting; the picker calls `xhigh` «Extra».
      */
     val CLAUDE_CODE_EFFORT = ReasoningCapability.Controls(
-        values = setOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.XHIGH, ReasoningEffort.MAX),
+        values = setOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.XHIGH,
+            ReasoningEffort.MAX, ReasoningEffort.ULTRACODE),
         dialect = WireDialect.EFFORT,
         names = mapOf(ReasoningEffort.XHIGH to "extra"),
     )

@@ -36,6 +36,19 @@ class ClaudeLaunchTest {
         assertTrue("--effort" !in ClaudeCommand.completion("c", "haiku", null, "/s").arguments)
     }
 
+    @Test fun subscriptionKeepsMaxAndUltracodeDistinct() {
+        val max = ClaudeCommand.completion("c", "opus", "max", "/s")
+        assertEquals("max", max.value("--effort"))
+        assertTrue("--settings" !in max.arguments)
+        assertEquals("WebSearch,WebFetch", max.value("--tools"))
+
+        val ultracode = ClaudeCommand.completion("c", "opus", "ultracode", "/s")
+        assertEquals("xhigh", ultracode.value("--effort"))
+        assertEquals("""{"ultracode":true}""", ultracode.value("--settings"))
+        assertEquals("WebSearch,WebFetch,Workflow", ultracode.value("--tools"))
+        assertEquals("WebSearch,WebFetch,Workflow", ultracode.value("--allowedTools"))
+    }
+
     @Test fun codingRunOnTheSubscriptionDropsInheritedKeysButAKeyedProfileKeepsItsOwn() {
         val subscription = LlmProfile("s", "Anthropic (подписка Claude Code)", "", provider = ProviderType.ANTHROPIC_SUBSCRIPTION, modelId = "opus")
         val launch = ClaudeCommand.build("c", request(profile = subscription), files, ClaudeMcpServers.None, null)
@@ -80,6 +93,9 @@ class ClaudeLaunchTest {
         assertTrue("--effort" !in args(EffortSelection.Default))
         assertTrue("--effort" !in args(EffortSelection.of(ReasoningEffort.AUTO)))
         assertEquals("high", args(EffortSelection.of(ReasoningEffort.HIGH)).let { it[it.indexOf("--effort") + 1] })
+        val ultracode = args(EffortSelection.of(ReasoningEffort.ULTRACODE))
+        assertEquals("xhigh", ultracode[ultracode.indexOf("--effort") + 1])
+        assertEquals("""{"ultracode":true}""", ultracode[ultracode.indexOf("--settings") + 1])
     }
 
     @Test fun ultracodeRunsAtXhighWithTheSessionsWorkflowSetting() {
