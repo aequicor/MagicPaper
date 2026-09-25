@@ -93,6 +93,7 @@ internal class LoggingCodingService(private val delegate: CodingService) : Codin
     private fun CodingRecovery.logFields() = when (this) {
         is CodingRecovery.SignIn -> arrayOf("kind" to "sign_in", "backend" to engine.name)
     }
+    override fun signOutEngine(engine: CodingEngine) { logAction("signOutEngine", "backend" to engine.name); delegate.signOutEngine(engine) }
     override fun addCodingProject() { logAction("addCodingProject"); delegate.addCodingProject() }
     override fun selectCodingProject(id: String) { logAction("selectCodingProject", "projectId" to id); delegate.selectCodingProject(id) }
     override fun approveImmunityIntervention(organismId: String, proposalId: String, action: ImmunityAction, deleteConfirmed: Boolean) {

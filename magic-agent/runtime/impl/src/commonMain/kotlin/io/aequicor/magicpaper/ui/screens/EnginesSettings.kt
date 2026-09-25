@@ -72,17 +72,22 @@ fun EnginesSettings(vm: NativeSettingsComponent, state: SettingsState) {
             val recovery = CodingRecovery.SignIn(descriptor.engine)
             PaperDivider()
             EngineAccountSection(descriptor, coding.coding.engines[descriptor.engine] ?: RuntimeStatus(RuntimePhase.UNKNOWN),
-                recovery in coding.coding.pendingRecoveries, { vm.recover(recovery) }, { vm.cancelRecovery(recovery) },
-                { vm.prepareCodingRuntime(descriptor.engine) })
+                recovery in coding.coding.pendingRecoveries, descriptor.engine in coding.coding.signingOutEngines,
+                { vm.recover(recovery) }, { vm.cancelRecovery(recovery) },
+                { vm.prepareCodingRuntime(descriptor.engine) }, { vm.signOutEngine(descriptor.engine) })
         }
         PaperButton("Настроить подключения и модели", { vm.openModelsSettings() }, kind = PaperButtonKind.QUIET)
     }
 }
 
-/** The engine's own account, beside the ChatGPT subscription: its state and the sign-in that the engine performs itself. */
+/**
+ * The engine's own account, beside the ChatGPT subscription: its state and the sign-in and sign-out that the engine
+ * performs itself. The engine can report a login whose token no longer works; leaving the account lets a fresh sign-in
+ * replace it.
+ */
 @Composable
-internal fun EngineAccountSection(descriptor: BackendAgentDescriptor, status: RuntimeStatus, pending: Boolean,
-    onSignIn: () -> Unit, onCancel: () -> Unit, onRefresh: () -> Unit) {
+internal fun EngineAccountSection(descriptor: BackendAgentDescriptor, status: RuntimeStatus, pending: Boolean, signingOut: Boolean,
+    onSignIn: () -> Unit, onCancel: () -> Unit, onRefresh: () -> Unit, onSignOut: () -> Unit) {
     val name = descriptor.adapterName
     val recovery = CodingRecovery.SignIn(descriptor.engine)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -93,7 +98,11 @@ internal fun EngineAccountSection(descriptor: BackendAgentDescriptor, status: Ru
             false -> "Войдите в $name: запросы будут расходовать лимит вашей подписки, API-ключ не нужен."
             null -> if (status.phase == RuntimePhase.READY) "$name не сообщает, выполнен ли вход." else "Проверьте движок, чтобы узнать, выполнен ли вход."
         }, color = if (status.signedIn == true) LocalPaperColors.current.action else LocalPaperColors.current.secondaryText)
-        if (status.signedIn == true && !pending) PaperButton("Обновить", onRefresh, kind = PaperButtonKind.QUIET)
+        if (status.signedIn == true && !pending) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // A check that lands after the sign-out would show the account signed in again.
+            PaperButton("Обновить", onRefresh, kind = PaperButtonKind.QUIET, enabled = !signingOut)
+            PaperButton("Выйти", onSignOut, kind = PaperButtonKind.QUIET, busy = signingOut)
+        }
         else PaperRecoveryAction(recovery.actionLabel, recovery.pendingLabel, pending, onSignIn, onCancel)
     }
 }

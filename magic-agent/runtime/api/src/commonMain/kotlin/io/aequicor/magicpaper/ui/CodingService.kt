@@ -46,6 +46,8 @@ interface CodingService {
     /** Действие, предложенное рядом с ошибкой; ход виден в [CodingUi.pendingRecoveries], итог — уведомлением. */
     fun recover(recovery: CodingRecovery)
     fun cancelRecovery(recovery: CodingRecovery)
+    /** Выход из собственного аккаунта движка; ход виден в [CodingUi.signingOutEngines], отказ — уведомлением. */
+    fun signOutEngine(engine: CodingEngine)
     fun addCodingProject()
     fun selectCodingProject(id: String)
     fun approveImmunityIntervention(organismId: String, proposalId: String, action: ImmunityAction, deleteConfirmed: Boolean = false)

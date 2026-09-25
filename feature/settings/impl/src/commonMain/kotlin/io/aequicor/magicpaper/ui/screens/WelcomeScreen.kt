@@ -284,7 +284,7 @@ private fun WelcomeModel(vm: DefaultSettingsComponent, state: SettingsState, dra
             }
         } else if (claude) {
             ClaudeSubscriptionAccount(state.claudeSubscription, vm::signInClaudeSubscription, vm::cancelClaudeSubscriptionSignIn,
-                vm::refreshClaudeSubscription)
+                vm::refreshClaudeSubscription, vm::signOutClaudeSubscription)
         } else {
             Field("Base URL", draft.baseUrl) { onDraft(draft.copy(baseUrl = it)) }
             Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {

@@ -524,7 +524,7 @@ class DefaultSettingsService(
 
     override fun refreshClaudeSubscription() {
         val service = claudeSubscription ?: return
-        if (_state.value.claudeSubscription.let { it.checking || it.signingIn }) return
+        if (_state.value.claudeSubscription.let { it.checking || it.signingIn || it.signingOut }) return
         val operation = ++claudeOperation
         _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(checking = true, error = null)) }
         scope.launch {
@@ -544,7 +544,7 @@ class DefaultSettingsService(
     /** Claude Code opens its sign-in page itself; the flow ends when the browser returns to it, or on cancel. */
     override fun signInClaudeSubscription() {
         val service = claudeSubscription ?: return
-        if (_state.value.claudeSubscription.signingIn) return
+        if (_state.value.claudeSubscription.let { it.signingIn || it.signingOut }) return
         val operation = ++claudeOperation
         _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(signingIn = true, checking = false, error = null)) }
         claudeSignIn = scope.launch {
@@ -567,6 +567,32 @@ class DefaultSettingsService(
     }
 
     override fun cancelClaudeSubscriptionSignIn() { claudeSignIn?.cancel() }
+
+    /** The CLI reports a stored login even when its token is dead; signing out lets the next sign-in replace the token. */
+    override fun signOutClaudeSubscription() {
+        val service = claudeSubscription ?: return
+        if (_state.value.claudeSubscription.let { it.signingIn || it.signingOut }) return
+        // A check still running belongs to the account before the sign-out and must not show it signed in again.
+        val operation = ++claudeOperation
+        _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(signingOut = true, checking = false, error = null)) }
+        scope.launch {
+            try {
+                val result = service.signOut()
+                if (operation == claudeOperation) _state.update {
+                    it.copy(claudeSubscription = when (result) {
+                        EngineSignOutResult.SignedOut -> it.claudeSubscription.copy(signedIn = false)
+                        is EngineSignOutResult.Failed -> it.claudeSubscription.copy(error = result.reason)
+                    })
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                providerFailed("claude_subscription_logout", failure)
+                if (operation == claudeOperation) _state.update {
+                    it.copy(claudeSubscription = it.claudeSubscription.copy(error = "Не удалось выйти из Claude Code. Повторите действие."))
+                }
+            } finally { if (operation == claudeOperation) _state.update { it.copy(claudeSubscription = it.claudeSubscription.copy(signingOut = false)) } }
+        }
+    }
 
     override fun openAiSubscriptionSignedIn(): Boolean =
         _state.value.openAiSubscription.account?.signedIn == true

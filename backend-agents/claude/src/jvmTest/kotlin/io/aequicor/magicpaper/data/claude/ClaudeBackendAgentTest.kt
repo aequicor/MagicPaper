@@ -14,14 +14,56 @@ import kotlin.test.*
 class ClaudeBackendAgentTest {
     private val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
-    private class Fixture(val home: File) : AutoCloseable {
+    private class Fixture(val home: File, private val windows: Boolean) : AutoCloseable {
         val work = home.resolve("work").apply { mkdirs() }
         val recorded = CopyOnWriteArrayList<String>()
         val cleared = CopyOnWriteArrayList<String>()
         val errors = CopyOnWriteArrayList<String>()
-        val binary = home.resolve("claude")
+        val binary = home.resolve(if (windows) "claude.cmd" else "claude")
         fun script(body: String) { binary.writeText("#!/bin/sh\nD=\"${home.path}\"\nprintf '%s\\n' \"\$@\" > \"\$D/args\"\n$body\n"); binary.setExecutable(true) }
         fun args() = home.resolve("args").readLines()
+
+        /**
+         * A CLI with an account, on every platform (a batch file on Windows): `auth status` reports a login while the file
+         * `credentials` exists and `auth logout` deletes it; an answer fails as a dead OAuth token does while `expired` exists.
+         */
+        fun account() {
+            val expired = """{"type":"result","is_error":true,"subtype":"success","result":"Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue."}"""
+            val answered = """{"type":"result","subtype":"success","is_error":false,"result":"ok"}"""
+            if (!windows) return script("""
+case "${'$'}1 ${'$'}2" in
+  "--version "*) echo '2.1.133 (Claude Code)'; exit 0;;
+  "auth status") if [ -f "${'$'}D/credentials" ]; then echo '{ "loggedIn": true }'; else echo '{ "loggedIn": false }'; fi; exit 0;;
+  "auth logout") rm -f "${'$'}D/credentials"; exit 0;;
+esac
+cat > /dev/null
+if [ -f "${'$'}D/expired" ]; then echo '$expired'; exit 1; fi
+echo '$answered'""")
+            binary.writeText("""@echo off
+if "%1"=="--version" goto version
+if "%1 %2"=="auth status" goto status
+if "%1 %2"=="auth logout" goto logout
+more > nul
+if exist "${home.path}\expired" goto expired
+echo $answered
+exit /b 0
+:expired
+echo $expired
+exit /b 1
+:version
+echo 2.1.133 (Claude Code)
+exit /b 0
+:status
+if exist "${home.path}\credentials" (echo { "loggedIn": true }) else (echo { "loggedIn": false })
+exit /b 0
+:logout
+if exist "${home.path}\credentials" del "${home.path}\credentials"
+exit /b 0
+""")
+        }
+        fun mark(name: String, present: Boolean) { home.resolve(name).let { if (present) it.writeText("") else it.delete() } }
+        suspend fun answer(agent: NativeAgentAdapter) = checkNotNull(agent.completion).complete(NativeCompletionRequest("sonnet",
+            "system text", "base text", buildJsonArray { addJsonObject { put("type", "text"); put("text", "Привет") } }, "high", 30), {}, {})
         fun agent(): NativeAgentAdapter = ClaudeBackendContribution().create(environment())
         private fun environment() = NativeBackendEnvironment(
             Json, home.resolve("state").path, binary.path, { null }, NativeResources { error("No resource read") },
@@ -56,7 +98,7 @@ class ClaudeBackendAgentTest {
         override fun close() { home.deleteRecursively() }
     }
 
-    private fun fixture() = Fixture(Files.createTempDirectory("claude-agent").toFile())
+    private fun fixture() = Fixture(Files.createTempDirectory("claude-agent").toFile(), windows)
     private fun run(f: Fixture, request: NativeAgentRequest) = nativeRunBlocking { f.agent().use { it.run(request).toList() } }
 
     private val success = """
@@ -163,6 +205,36 @@ exit 1""")
                 assertEquals(CodingRecovery.SignIn(CodingEngine.CLAUDE_CODE), failure.recovery,
                     "An expired token offers the engine's own sign-in instead of the raw provider text")
                 assertEquals(false, agent.status().signedIn, "A dead token must not be shown as a completed sign-in")
+            }
+        }
+    }
+
+    /** Session titles and chats reach the CLI this way, so a dead token is often found here before any run. */
+    @Test fun aChatRefusedForADeadTokenDowngradesTheAccountUntilAnAnswerSucceeds() = kotlinx.coroutines.runBlocking {
+        fixture().use { f ->
+            f.account(); f.mark("credentials", true); f.mark("expired", true)
+            f.agent().use { agent ->
+                assertEquals(true, agent.status().signedIn, "The CLI's own status still claims a login")
+                assertTrue(assertFailsWith<NativeCompletionFailure> { f.answer(agent) }.signedOut)
+                assertEquals(false, agent.status().signedIn, "A chat refused for a dead token must not leave the account shown as signed in")
+                f.mark("expired", false)
+                assertEquals("ok", f.answer(agent))
+                assertEquals(true, agent.status().signedIn, "An answer proves the login works")
+            }
+        }
+    }
+
+    @Test fun signingOutEndsTheDowngradeSoALaterLoginCountsAgain() = kotlinx.coroutines.runBlocking {
+        fixture().use { f ->
+            f.account(); f.mark("credentials", true); f.mark("expired", true)
+            f.agent().use { agent ->
+                assertFailsWith<NativeCompletionFailure> { f.answer(agent) }
+                assertEquals(false, agent.status().signedIn)
+                assertEquals(EngineSignOutResult.SignedOut, checkNotNull(agent.signOut).signOut())
+                assertFalse(f.home.resolve("credentials").exists(), "The CLI forgot its stored login")
+                assertEquals(false, agent.status().signedIn)
+                f.mark("credentials", true)
+                assertEquals(true, agent.status().signedIn, "A login made after the sign-out, in a terminal say, is shown as one")
             }
         }
     }

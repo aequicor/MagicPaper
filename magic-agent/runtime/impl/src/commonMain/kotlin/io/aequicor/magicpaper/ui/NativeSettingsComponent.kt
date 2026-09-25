@@ -59,6 +59,7 @@ class NativeSettingsComponent(
     fun uninstallCodingRuntime(engine: CodingEngine) = coding.uninstallCodingRuntime(engine)
     fun recover(recovery: CodingRecovery) = coding.recover(recovery)
     fun cancelRecovery(recovery: CodingRecovery) = coding.cancelRecovery(recovery)
+    fun signOutEngine(engine: CodingEngine) = coding.signOutEngine(engine)
     override fun onAction(action: SettingsAction) {
         when (action) {
             is SettingsAction.Save -> service.saveSettings(action.settings)

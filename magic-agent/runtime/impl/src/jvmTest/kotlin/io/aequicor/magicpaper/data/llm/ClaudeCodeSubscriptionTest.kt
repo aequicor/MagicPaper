@@ -23,6 +23,7 @@ class ClaudeCodeSubscriptionTest {
                 CodingModel("anthropic", "haiku", "Haiku"))
         }
         override val signIn = NativeSignIn { EngineSignInResult.SignedIn }
+        override val signOut = NativeSignOut { EngineSignOutResult.SignedOut }
         override val completion = object : NativeCompletion {
             override val provider = ProviderType.ANTHROPIC_SUBSCRIPTION
             override suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit, onUsage: (UsageCallResult) -> Unit): String {
@@ -104,9 +105,10 @@ class ClaudeCodeSubscriptionTest {
         assertFalse(other.signedOut)
     }
 
-    @Test fun accountStateAndSignInComeFromTheCli() = runBlocking {
+    @Test fun accountStateSignInAndSignOutComeFromTheCli() = runBlocking {
         val subscription = ClaudeCodeSubscription(Adapter { "" })
         assertEquals(false, subscription.signedIn())
         assertEquals(EngineSignInResult.SignedIn, subscription.signIn())
+        assertEquals(EngineSignOutResult.SignedOut, subscription.signOut())
     }
 }

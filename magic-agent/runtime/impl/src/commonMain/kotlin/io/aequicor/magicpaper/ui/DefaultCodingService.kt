@@ -1060,6 +1060,36 @@ class DefaultCodingService(
         }
     }
 
+    override fun signOutEngine(engine: CodingEngine) {
+        val runtime = codingRuntime ?: return
+        if (engine in _state.value.coding.signingOutEngines) return
+        _state.update { it.copy(coding = it.coding.copy(signingOutEngines = it.coding.signingOutEngines + engine)) }
+        scope.launch {
+            try {
+                when (val result = runtime.signOut(engine)) {
+                    // The engine confirmed it is signed out, so the account row changes without probing every engine again.
+                    EngineSignOutResult.SignedOut -> {
+                        AppLog.info("coding", "engine.signed_out", mapOf("backend" to engine.name))
+                        _state.update { state ->
+                            val known = state.coding.engines[engine] ?: return@update state
+                            state.copy(coding = state.coding.copy(engines = state.coding.engines + (engine to known.copy(signedIn = false))))
+                        }
+                    }
+                    is EngineSignOutResult.Failed -> {
+                        AppLog.info("coding", "engine.sign_out.unfinished", mapOf("backend" to engine.name))
+                        _state.update { it.copy(notice = result.reason) }
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                AppLog.error("coding", "engine.sign_out.failed", e, mapOf("backend" to engine.name))
+                _state.update { it.copy(notice = "Не удалось выйти из ${engine.title}. Повторите попытку.") }
+            } finally {
+                _state.update { it.copy(coding = it.coding.copy(signingOutEngines = it.coding.signingOutEngines - engine)) }
+            }
+        }
+    }
+
     /** Новый проект: выбор папки нативным диалогом. */
     override fun addCodingProject() {
         if (closing) return

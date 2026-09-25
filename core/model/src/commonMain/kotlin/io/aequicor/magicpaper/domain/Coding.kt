@@ -722,6 +722,12 @@ sealed interface EngineSignInResult {
     data class Failed(val reason: String) : EngineSignInResult
 }
 
+/** Outcome of forgetting an engine's own login, so that the next sign-in fetches fresh credentials; [Failed.reason] is safe to show. */
+sealed interface EngineSignOutResult {
+    data object SignedOut : EngineSignOutResult
+    data class Failed(val reason: String) : EngineSignOutResult
+}
+
 /** Роли в журнале проекта. */
 @Serializable
 enum class CodingRole { USER, AGENT }

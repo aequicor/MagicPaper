@@ -50,7 +50,11 @@ prompts. Its journaled delivery stage is `CLAUDE_STDIN`.
 
 The CLI owns the Claude account, so the adapter declares `NATIVE_SIGN_IN`: `signIn` runs `claude auth login`
 without a terminal (the CLI opens its page in the browser and completes through its loopback callback) and a
-signed-out run fails with `CodingRecovery.SignIn`, which the transcript offers as a button. Its `completion`
+signed-out run fails with `CodingRecovery.SignIn`, which the transcript offers as a button. `signOut` runs
+`claude auth logout`: `claude auth status` reports a stored login whether or not its OAuth token still works, so
+leaving the account is how a dead token is replaced by a fresh sign-in. A run or chat answer refused for a dead token
+keeps the account shown as signed out until a sign-in or a successful answer; after a sign-out the CLI's own report
+counts again. Its `completion`
 answers `ProviderType.ANTHROPIC_SUBSCRIPTION` — the chat on the Claude subscription — as one `claude -p` in an
 empty directory with only `WebSearch`/`WebFetch`, no user settings, MCP servers or saved session, and with any
 inherited API key, base URL or cloud switch removed so the request is billed to the subscription.

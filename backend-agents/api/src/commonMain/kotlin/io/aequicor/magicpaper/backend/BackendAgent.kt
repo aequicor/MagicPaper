@@ -90,6 +90,9 @@ fun interface NativeRemoval { suspend fun remove() }
 /** The engine's own sign-in: it opens the vendor's page in the browser and returns once the flow ended. Cancellation stops it. */
 fun interface NativeSignIn { suspend fun signIn(): EngineSignInResult }
 
+/** Forgets the engine's own stored login, so that the next [NativeSignIn] replaces a dead token instead of keeping it. */
+fun interface NativeSignOut { suspend fun signOut(): EngineSignOutResult }
+
 /**
  * One plain answer through the engine's own account: no project and no application tools. A failure is thrown as
  * [NativeCompletionFailure] whose message is safe to show; cancellation stops the engine.
@@ -117,6 +120,8 @@ interface NativeAgentAdapter : AutoCloseable {
     val models: NativeModelCatalog? get() = null
     /** Задан ровно тогда, когда у дескриптора есть [BackendAgentCapability.NATIVE_SIGN_IN]; a signed-out failure then carries [CodingRecovery.SignIn]. */
     val signIn: NativeSignIn? get() = null
+    /** Задан вместе с [signIn]: из собственного аккаунта движка можно выйти, чтобы войти заново. */
+    val signOut: NativeSignOut? get() = null
     /** Present for an engine that answers plain requests on its own account, such as a chat on a subscription. */
     val completion: NativeCompletion? get() = null
     suspend fun status(): NativeInstallationStatus

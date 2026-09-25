@@ -51,6 +51,16 @@ class BackendAgentCatalogTest {
         assertContains(failure.message.orEmpty(), "model catalog")
         assertTrue(invalid.closed)
     }
+    /** An account that can be entered but not left would keep a dead token with nothing to replace it. */
+    @Test fun declaredSignInWithoutSignOutIsRejected() = environment { env ->
+        val invalid = FakeAgent(descriptor.copy(capabilities = setOf(BackendAgentCapability.NATIVE_SIGN_IN)),
+            signIn = NativeSignIn { EngineSignInResult.SignedIn })
+        val failure = assertFailsWith<IllegalArgumentException> {
+            catalog(listOf(contribution(invalid.descriptor) { invalid })).create { _, _ -> env }
+        }
+        assertContains(failure.message.orEmpty(), "sign-out")
+        assertTrue(invalid.closed)
+    }
     @Test fun onlyEnginesWithTheirOwnModelListsDeclareANativeModelCatalog() {
         val declared = createBackendAgentCatalog().descriptors
             .filter { BackendAgentCapability.NATIVE_MODEL_CATALOG in it.capabilities }.map { it.engine }
@@ -86,6 +96,8 @@ class BackendAgentCatalogTest {
         override val descriptor: BackendAgentDescriptor,
         val closeFailure: Throwable? = null,
         override val models: NativeModelCatalog? = null,
+        override val signIn: NativeSignIn? = null,
+        override val signOut: NativeSignOut? = null,
     ) : BackendAgent {
         val aborted = mutableListOf<String>()
         var closed = false

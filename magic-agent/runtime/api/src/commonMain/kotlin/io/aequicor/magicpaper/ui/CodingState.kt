@@ -198,6 +198,8 @@ data class CodingUi(
     val preparingEngines: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
     /** Действия у ошибок, которые сейчас выполняются, например вход движка, ждущий подтверждения в браузере. */
     val pendingRecoveries: Set<io.aequicor.magicpaper.domain.CodingRecovery> = emptySet(),
+    /** Движки, из аккаунта которых сейчас выполняется выход. */
+    val signingOutEngines: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
     /** Активная вкладка проекта: диалог с агентом или панель плагина. */
     val sessionMode: CodingSessionMode = CodingSessionMode.DIALOG,
     val planning: CodingPlanningState = CodingPlanningState(),

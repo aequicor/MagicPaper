@@ -198,11 +198,58 @@ class SettingsProviderOperationsTest {
         } finally { claude.outcome.cancel(); fixture.service.close(); Dispatchers.resetMain() }
     }
 
+    /** The CLI keeps reporting a login for a dead token; leaving the account is what lets a fresh sign-in replace it. */
+    @Test fun claudeSubscriptionSignOutReportsItsOutcomeAndALateCheckCannotUndoIt() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val claude = Claude()
+        val fixture = Fixture(this, claude = claude)
+        val release = CompletableDeferred<Unit>()
+        try {
+            fixture.service.start()
+            claude.statusRead = { true }
+            fixture.service.refreshClaudeSubscription(); runCurrent()
+            assertEquals(true, fixture.service.state.value.claudeSubscription.signedIn)
+
+            val exit = CompletableDeferred<EngineSignOutResult>()
+            claude.signOutAction = { exit.await() }
+            fixture.service.signOutClaudeSubscription(); runCurrent()
+            assertTrue(fixture.service.state.value.claudeSubscription.signingOut)
+            fixture.service.signInClaudeSubscription(); fixture.service.refreshClaudeSubscription(); runCurrent()
+            assertFalse(fixture.service.state.value.claudeSubscription.signingIn, "Nothing else starts while the sign-out runs")
+            assertFalse(fixture.service.state.value.claudeSubscription.checking)
+            exit.complete(EngineSignOutResult.SignedOut); runCurrent()
+            fixture.service.state.value.claudeSubscription.let { assertEquals(false, it.signedIn); assertFalse(it.signingOut); assertNull(it.error) }
+
+            claude.statusRead = { true }
+            fixture.service.refreshClaudeSubscription(); runCurrent()
+            claude.signOutAction = { EngineSignOutResult.Failed("Claude Code не выполнил выход.") }
+            fixture.service.signOutClaudeSubscription(); runCurrent()
+            fixture.service.state.value.claudeSubscription.let {
+                assertEquals(true, it.signedIn, "A refused sign-out keeps the known account")
+                assertEquals("Claude Code не выполнил выход.", it.error); assertFalse(it.signingOut)
+            }
+
+            claude.signOutAction = { error("private CLI output") }
+            fixture.service.signOutClaudeSubscription(); runCurrent()
+            fixture.service.state.value.claudeSubscription.let { assertFalse(it.error!!.contains("private")); assertFalse(it.signingOut) }
+
+            // A check that started before the sign-out answers for the account the sign-out removed.
+            claude.statusRead = { release.await(); true }
+            fixture.service.refreshClaudeSubscription(); runCurrent()
+            claude.signOutAction = { EngineSignOutResult.SignedOut }
+            fixture.service.signOutClaudeSubscription(); runCurrent()
+            release.complete(Unit); runCurrent()
+            fixture.service.state.value.claudeSubscription.let { assertEquals(false, it.signedIn); assertFalse(it.checking); assertFalse(it.signingOut) }
+        } finally { release.complete(Unit); claude.outcome.cancel(); fixture.service.close(); Dispatchers.resetMain() }
+    }
+
     private class Claude : ClaudeSubscriptionService {
         var statusRead: suspend () -> Boolean? = { false }
         var outcome = CompletableDeferred<EngineSignInResult>()
+        var signOutAction: suspend () -> EngineSignOutResult = { EngineSignOutResult.SignedOut }
         override suspend fun signedIn() = statusRead()
         override suspend fun signIn() = outcome.await()
+        override suspend fun signOut() = signOutAction()
         override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> = error("Unexpected models")
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected completion")
     }

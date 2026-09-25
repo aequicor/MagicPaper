@@ -281,7 +281,7 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
             SubscriptionAccount(vm, state)
         } else if (claude) {
             ClaudeSubscriptionAccount(state.claudeSubscription, vm::signInClaudeSubscription, vm::cancelClaudeSubscriptionSignIn,
-                vm::refreshClaudeSubscription)
+                vm::refreshClaudeSubscription, vm::signOutClaudeSubscription)
         } else {
             Field("Base URL", draft.baseUrl) { draft = draft.copy(baseUrl = it) }
             Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
@@ -399,10 +399,12 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
 
 /**
  * Вход Claude Code для подключения «Anthropic (подписка Claude Code)». Страницу входа открывает сам CLI, и учётные
- * данные остаются у него, поэтому здесь только состояние и запуск входа.
+ * данные остаются у него, поэтому здесь только состояние, запуск входа и выход. CLI сообщает о входе и тогда, когда его
+ * токен уже не действует: выход позволяет войти заново и получить новый.
  */
 @Composable
-internal fun ClaudeSubscriptionAccount(auth: ClaudeSubscriptionUi, onSignIn: () -> Unit, onCancel: () -> Unit, onRefresh: () -> Unit) {
+internal fun ClaudeSubscriptionAccount(auth: ClaudeSubscriptionUi, onSignIn: () -> Unit, onCancel: () -> Unit, onRefresh: () -> Unit,
+    onSignOut: () -> Unit) {
     val colors = LocalPaperColors.current
     if (!auth.available) {
         PaperText("Подписка Claude Code поддерживается только в desktop-приложении.", color = colors.error, style = paperTextStyle(PaperTextRole.BODY))
@@ -411,6 +413,7 @@ internal fun ClaudeSubscriptionAccount(auth: ClaudeSubscriptionUi, onSignIn: () 
     PaperText(
         when {
             auth.checking -> "Проверяю вход в Claude Code…"
+            auth.signingOut -> "Выхожу из Claude Code…"
             auth.signedIn == true -> "✓ Claude Code: вход выполнен"
             else -> "Войдите в Claude Code: запросы будут расходовать лимит вашей подписки Claude, API-ключ не нужен."
         },
@@ -418,7 +421,13 @@ internal fun ClaudeSubscriptionAccount(auth: ClaudeSubscriptionUi, onSignIn: () 
         color = if (auth.signedIn == true) colors.action else colors.secondaryText,
     )
     auth.error?.let { PaperText(it, style = paperTextStyle(PaperTextRole.BODY), color = colors.error) }
-    if (auth.signedIn == true && !auth.signingIn) PaperAction(onClick = onRefresh, enabled = !auth.checking) { PaperText("Обновить") }
+    if (auth.signedIn == true && !auth.signingIn) {
+        // The status line reports the sign-out; until it ends there is nothing to act on.
+        if (!auth.signingOut) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperAction(onClick = onRefresh, enabled = !auth.checking) { PaperText("Обновить") }
+            PaperAction(onClick = onSignOut) { PaperText("Выйти") }
+        }
+    }
     else PaperRecoveryAction("Войти в Claude Code", "Подтвердите вход в браузере", auth.signingIn, onSignIn, onCancel)
 }
 

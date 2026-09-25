@@ -70,6 +70,7 @@ internal class GenericNativeRuntime(
     override fun ensureReady() = agent.prepare().map { it.runtimeStatus() }
     override suspend fun uninstall() = checkNotNull(agent.removal) { "Dependencies are managed by an external installer" }.remove()
     override suspend fun signIn(engine: CodingEngine) = agent.signIn?.signIn() ?: super.signIn(engine)
+    override suspend fun signOut(engine: CodingEngine) = agent.signOut?.signOut() ?: super.signOut(engine)
     override suspend fun nativeToolResults(session: CodingSession, callIds: Set<String>) =
         checkNotNull(agent.history) { "Native history is not supported" }.results(session.piSessionId, callIds)
     override suspend fun reconcile(sessionId: String) {

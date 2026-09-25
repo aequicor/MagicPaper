@@ -36,8 +36,9 @@ internal class ClaudeBackendAgent(
     override val models = NativeModelCatalog { ClaudeModelCatalog.models }
     private val claudeSignIn = ClaudeSignIn(executable, environment.diagnostics)
     /**
-     * The CLI's `auth status` keeps claiming a login while its OAuth token is dead, so a run that failed on
-     * authentication downgrades the reported account until a sign-in or a successful run proves otherwise.
+     * The CLI's `auth status` keeps claiming a login while its OAuth token is dead, so a run or a chat answer that failed
+     * on authentication downgrades the reported account until a sign-in or a successful one proves otherwise. After a
+     * sign-out the CLI's own report is right again: a login it shows later is a new one, made here or in a terminal.
      */
     @Volatile private var authenticationFailed = false
     override val signIn: NativeSignIn = object : NativeSignIn {
@@ -45,8 +46,21 @@ internal class ClaudeBackendAgent(
             if (it is EngineSignInResult.SignedIn) authenticationFailed = false
         }
     }
-    override val completion: NativeCompletion =
-        ClaudeCompletion(executable, File(root, "chat"), environment.diagnostics, environment.toolPresentation)
+    override val signOut: NativeSignOut = object : NativeSignOut {
+        override suspend fun signOut(): EngineSignOutResult = claudeSignIn.signOut().also {
+            if (it is EngineSignOutResult.SignedOut) authenticationFailed = false
+        }
+    }
+    private val chat = ClaudeCompletion(executable, File(root, "chat"), environment.diagnostics, environment.toolPresentation)
+    override val completion: NativeCompletion = object : NativeCompletion {
+        override val provider = chat.provider
+        override suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit, onUsage: (UsageCallResult) -> Unit): String =
+            try { chat.complete(request, onActivity, onUsage).also { authenticationFailed = false } }
+            catch (failure: NativeCompletionFailure) {
+                if (failure.signedOut) authenticationFailed = true
+                throw failure
+            }
+    }
 
     override suspend fun status(): NativeInstallationStatus {
         val status = executable.status()

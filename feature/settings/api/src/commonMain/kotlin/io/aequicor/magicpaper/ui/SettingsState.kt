@@ -49,6 +49,7 @@ data class ClaudeSubscriptionUi(
     /** null until checked, or when Claude Code cannot tell. */
     val signedIn: Boolean? = null,
     val signingIn: Boolean = false,
+    val signingOut: Boolean = false,
     val error: String? = null,
 )
 /** Состояние desktop-входа через ChatGPT; available=false на Android/Web. */

@@ -108,6 +108,41 @@ class NativeSettingsApplicationTest {
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
+    /** The CLI keeps reporting a login for a dead token; leaving the account is what lets a fresh sign-in replace it. */
+    @Test fun engineSignOutIsPendingUntilItEndsAndShowsTheAccountSignedOut() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val entered = Channel<Unit>(Channel.UNLIMITED)
+        val outcomes = Channel<EngineSignOutResult>(Channel.UNLIMITED)
+        var calls = 0
+        val runtime = object : CodingRuntime by NoopCodingRuntime {
+            override suspend fun status(engine: CodingEngine) = RuntimeStatus(RuntimePhase.READY, signedIn = engine == CodingEngine.CLAUDE_CODE)
+            override suspend fun signOut(engine: CodingEngine): EngineSignOutResult {
+                assertEquals(CodingEngine.CLAUDE_CODE, engine)
+                calls++; entered.send(Unit)
+                return outcomes.receive()
+            }
+        }
+        val service = ModelSettingsFixture().prepareCoding(runtime)
+        val claude = CodingEngine.CLAUDE_CODE
+        try {
+            runCurrent()
+            assertEquals(true, service.state.value.coding.engines[claude]?.signedIn)
+            service.signOutEngine(claude); entered.receive()
+            assertEquals(setOf(claude), service.state.value.coding.signingOutEngines)
+            service.signOutEngine(claude); runCurrent()
+            assertEquals(1, calls, "A pending sign-out is not started twice")
+            outcomes.send(EngineSignOutResult.SignedOut); runCurrent()
+            assertTrue(service.state.value.coding.signingOutEngines.isEmpty())
+            assertEquals(false, service.state.value.coding.engines[claude]?.signedIn, "The account is shown signed out at once")
+            assertEquals(RuntimePhase.READY, service.state.value.coding.engines[claude]?.phase, "Only the account changed")
+
+            service.signOutEngine(claude); entered.receive()
+            outcomes.send(EngineSignOutResult.Failed("Claude Code не выполнил выход.")); runCurrent()
+            assertEquals("Claude Code не выполнил выход.", service.state.value.notice)
+            assertTrue(service.state.value.coding.signingOutEngines.isEmpty())
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun failedRememberedPreferenceKeepsCreatedSessionWithoutPublishingUnsavedEngine() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = ModelSettingsFixture()

@@ -33,6 +33,8 @@ interface SettingsService {
     fun refreshClaudeSubscription()
     fun signInClaudeSubscription()
     fun cancelClaudeSubscriptionSignIn()
+    /** Выход из Claude Code, чтобы следующий вход получил новый токен вместо недействующего. */
+    fun signOutClaudeSubscription()
     fun fetchModels(draft: LlmProfile)
     fun refreshProfileParameters(profileId: String)
     fun testConnection(draft: LlmProfile)

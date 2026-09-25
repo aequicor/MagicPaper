@@ -11,7 +11,10 @@ enum class BackendAgentCapability {
     /** Движок сам перечисляет свои модели и их уровни thinking: [NativeAgentAdapter.models] задан. */
     NATIVE_MODEL_CATALOG,
     DISABLE_NATIVE_SKILL_LOADING,
-    /** Движок входит в собственный аккаунт и сообщает, выполнен ли вход: [NativeAgentAdapter.signIn] задан. */
+    /**
+     * Движок входит в собственный аккаунт, выходит из него и сообщает, выполнен ли вход:
+     * [NativeAgentAdapter.signIn] и [NativeAgentAdapter.signOut] заданы.
+     */
     NATIVE_SIGN_IN,
     /** Движок запускает исполняемый файл, выбранный в настройках движков: карточка движка предлагает кнопку «Выбрать приложение». */
     EXECUTABLE_SELECTION,

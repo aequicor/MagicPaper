@@ -42,12 +42,14 @@ class SubscriptionAccountRenderTest {
             "signed-out" to ClaudeSubscriptionUi(available = true, signedIn = false),
             "pending" to ClaudeSubscriptionUi(available = true, signedIn = false, signingIn = true),
             "signed-in" to ClaudeSubscriptionUi(available = true, signedIn = true),
+            "checking" to ClaudeSubscriptionUi(available = true, signedIn = true, checking = true),
+            "signing-out" to ClaudeSubscriptionUi(available = true, signedIn = true, signingOut = true),
             "unavailable" to ClaudeSubscriptionUi(available = false),
         )
         for ((name, auth) in states) {
-            var signIns = 0; var cancels = 0
+            var signIns = 0; var cancels = 0; var signOuts = 0
             ImageComposeScene(390, 260) {
-                PaperTheme { PaperSurface { Column { ClaudeSubscriptionAccount(auth, { signIns++ }, { cancels++ }, {}) } } }
+                PaperTheme { PaperSurface { Column { ClaudeSubscriptionAccount(auth, { signIns++ }, { cancels++ }, {}, { signOuts++ }) } } }
             }.use { scene ->
                 repeat(6) { scene.render(it * 16_000_000L).close() }
                 val nodes = scene.nodes()
@@ -55,13 +57,32 @@ class SubscriptionAccountRenderTest {
                 fun action(label: String) = nodes.firstOrNull { node ->
                     node.config.contains(SemanticsActions.OnClick) && node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { it == label }
                 }
+                /** A text action: the clickable that holds the label. */
+                fun labelled(label: String) = nodes.firstOrNull { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == label } }
+                    ?.let { text -> generateSequence(text) { it.parent }.firstOrNull { it.config.contains(SemanticsActions.OnClick) } }
                 when (name) {
-                    "signed-out" -> { action("Войти в Claude Code")!!.config[SemanticsActions.OnClick].action!!.invoke(); assertEquals(1, signIns) }
+                    "signed-out" -> {
+                        action("Войти в Claude Code")!!.config[SemanticsActions.OnClick].action!!.invoke(); assertEquals(1, signIns)
+                        assertNull(labelled("Выйти"), "There is nothing to leave")
+                    }
                     "pending" -> {
                         assertTrue("Подтвердите вход в браузере" in texts)
                         action("Отменить")!!.config[SemanticsActions.OnClick].action!!.invoke(); assertEquals(1, cancels)
                     }
-                    "signed-in" -> { assertTrue("✓ Claude Code: вход выполнен" in texts); assertNull(action("Войти в Claude Code")) }
+                    "signed-in" -> {
+                        assertTrue("✓ Claude Code: вход выполнен" in texts); assertNull(action("Войти в Claude Code"))
+                        labelled("Выйти")!!.config[SemanticsActions.OnClick].action!!.invoke(); assertEquals(1, signOuts)
+                    }
+                    "checking" -> {
+                        assertTrue(labelled("Обновить")!!.config.contains(SemanticsProperties.Disabled))
+                        assertFalse(labelled("Выйти")!!.config.contains(SemanticsProperties.Disabled),
+                            "A dead token passes the check, so leaving the account must not wait for it")
+                    }
+                    "signing-out" -> {
+                        assertTrue("Выхожу из Claude Code…" in texts)
+                        assertNull(labelled("Выйти"), "A second sign-out cannot start")
+                        assertNull(labelled("Обновить"), "A check would answer for the old login")
+                    }
                     "unavailable" -> assertTrue(texts.any { "только в desktop" in it })
                 }
                 val file = File("build/reports/subscription-account/claude-$name.png").apply { parentFile.mkdirs() }
