@@ -229,8 +229,8 @@ private fun runMagicPaperWindow(
             }
             val feedback = remember(window) { DesktopComputerFeedback() }
             DisposableEffect(feedback) { onDispose { feedback.close() } }
-            // Floating agent panel: an always-on-top status card while sessions
-            // have work or results to report, independent of the main window's focus.
+            // Floating agent panel: show agent status while the main window is away,
+            // then return the whole screen to MagicPaper when its window comes forward.
             val agentPanel = remember(window, runtime) {
                 DesktopAgentPanel(
                     owner = window,

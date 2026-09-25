@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -65,7 +64,7 @@ public val PaperAgentDockCollapsedHeight: Dp = 152.dp
 public val PaperAgentDockExpandedWidth: Dp = 560.dp
 public val PaperAgentDockExpandedHeight: Dp = 600.dp
 public val PaperAgentDockShadowMargin: Dp = 8.dp
-public const val PaperAgentDockCompactRows: Int = 3
+public const val PaperAgentDockCompactRows: Int = 2
 public const val PaperAgentDockExpandDelayMillis: Long = 260L
 public const val PaperAgentDockCollapseDelayMillis: Long = 480L
 
@@ -101,7 +100,6 @@ public data class PaperDockSession(
     val tone: PaperActivityTone,
     val running: Boolean = false,
     val selected: Boolean = false,
-    val activityLabel: String? = null,
     val statusLabel: String = "",
     val needsYou: Boolean = false,
 )
@@ -125,7 +123,7 @@ public data class PaperAgentDockModel(
 /**
  * Floating agent surface. The card remains one coherent Paper surface while its native window
  * changes size. Hover opens after a short dwell; a drag freezes expansion until release. Keyboard
- * opening is sticky, and focus in the composer keeps a pointer-opened panel available.
+ * opening stays available until the pointer takes over or the reader closes it.
  */
 @Composable
 public fun PaperAgentDock(
@@ -152,23 +150,23 @@ public fun PaperAgentDock(
     val hovered by hoverSource.collectIsHoveredAsState()
     var dragging by remember { mutableStateOf(false) }
     var pressing by remember { mutableStateOf(false) }
-    var focused by remember { mutableStateOf(false) }
     var keyboardOpen by remember { mutableStateOf(false) }
+    var lastInputWasPointer by remember { mutableStateOf(false) }
     val latestExpansion by rememberUpdatedState(onExpandedChange)
 
-    LaunchedEffect(hovered, dragging, pressing, expanded, keyboardOpen, focused) {
+    LaunchedEffect(hovered, dragging, pressing, expanded, keyboardOpen) {
         if (dragging || pressing) return@LaunchedEffect
         if (hovered && !expanded) {
             delay(PaperAgentDockExpandDelayMillis)
             latestExpansion(true)
-        } else if (!hovered && expanded && !keyboardOpen && !focused) {
+        } else if (!hovered && expanded && !keyboardOpen) {
             delay(PaperAgentDockCollapseDelayMillis)
             latestExpansion(false)
         }
     }
 
     val dragHandle: @Composable (Modifier) -> Unit = { handleModifier ->
-        DockDragHandle(handleModifier, onDragStart, onDragBy, onDragEnd, onNudgeBy) { dragging = it }
+        DockDragHandle(handleModifier, indicator, onDragStart, onDragBy, onDragEnd, onNudgeBy) { dragging = it }
     }
     PaperSurface(
         modifier = modifier.fillMaxSize().padding(PaperAgentDockShadowMargin)
@@ -177,13 +175,17 @@ public fun PaperAgentDock(
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
-                        if (event.type == PointerEventType.Press) pressing = true
+                        if (event.type == PointerEventType.Press) {
+                            pressing = true
+                            lastInputWasPointer = true
+                        }
                         else if (event.changes.none { it.pressed }) pressing = false
+                        if (event.type == PointerEventType.Move) keyboardOpen = false
                     }
                 }
             }
-            .onFocusChanged { focused = it.hasFocus }
             .onPreviewKeyEvent {
+                if (it.type == KeyEventType.KeyDown) lastInputWasPointer = false
                 if (expanded && it.type == KeyEventType.KeyDown && it.key == Key.Escape) {
                     keyboardOpen = false
                     dragging = false
@@ -198,12 +200,12 @@ public fun PaperAgentDock(
     ) {
         Crossfade(expanded, animationSpec = tween(if (animate) 150 else 0), label = "Agent panel content") { open ->
             if (open) ExpandedDock(
-                model, indicator, dragHandle, input, onInputChange, onSend, onStop,
+                model, dragHandle, input, onInputChange, onSend, onStop,
                 onOpenMainWindow, onSelectSession, onRecovery, onCancelRecovery,
                 onCollapse = { keyboardOpen = false; onExpandedChange(false) },
-            ) else CompactDock(model, indicator, dragHandle) { sessionId ->
+            ) else CompactDock(model, dragHandle) { sessionId ->
                 sessionId?.let(onSelectSession)
-                keyboardOpen = true
+                keyboardOpen = !lastInputWasPointer
                 onExpandedChange(true)
             }
         }
@@ -216,6 +218,7 @@ private class DragOrigin { var value: Offset = Offset.Zero }
 @Composable
 private fun DockDragHandle(
     modifier: Modifier,
+    indicator: @Composable () -> Unit,
     onStart: (Float, Float) -> Unit,
     onMove: (Float, Float) -> Unit,
     onEnd: () -> Unit,
@@ -223,6 +226,7 @@ private fun DockDragHandle(
     onDragging: (Boolean) -> Unit,
 ) {
     val density = LocalDensity.current.density
+    val largeText = LocalDensity.current.fontScale >= 1.35f
     val origin = remember { DragOrigin() }
     val start by rememberUpdatedState(onStart)
     val move by rememberUpdatedState(onMove)
@@ -269,37 +273,43 @@ private fun DockDragHandle(
                 "Перемещение панели: стрелки двигают, Enter завершает" else "Переместить панель агентов" },
         contentAlignment = Alignment.CenterStart,
     ) {
-        PaperText(if (keyboardMove) "Стрелки для перемещения" else "⋮⋮ MagicPaper",
-            role = PaperTextRole.CHROME, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PaperText(if (keyboardMove) "Стрелки для перемещения"
+                else if (largeText) "MagicPaper" else "⋮⋮ MagicPaper",
+                modifier = Modifier.weight(1f, fill = false), role = PaperTextRole.CHROME,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.width(8.dp))
+            indicator()
+        }
     }
 }
 
 @Composable
 private fun CompactDock(
     model: PaperAgentDockModel,
-    indicator: @Composable () -> Unit,
     dragHandle: @Composable (Modifier) -> Unit,
     onOpen: (String?) -> Unit,
 ) {
     val colors = LocalPaperColors.current
     val largeText = LocalDensity.current.fontScale >= 1.35f
-    val visibleRows = if (largeText) 2 else PaperAgentDockCompactRows
+    val visibleRows = if (largeText) 1 else PaperAgentDockCompactRows
     val hiddenSessions = (model.sessions.size - visibleRows).coerceAtLeast(0)
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
-            indicator()
-            Spacer(Modifier.width(8.dp))
             dragHandle(Modifier.weight(1f).fillMaxHeight())
             Spacer(Modifier.width(6.dp))
             if (model.attentionCount > 0) {
-                PaperText(if (largeText) "! ${model.attentionCount}" else "Внимание: ${model.attentionCount}",
+                PaperText("!${model.attentionCount}",
                     modifier = Modifier.semantics {
                         contentDescription = "${model.attentionCount} сессий требуют внимания"
                     }, role = PaperTextRole.CHROME, color = colors.error)
                 Spacer(Modifier.width(4.dp))
             }
-            PaperIconButton("Раскрыть панель агентов", onClick = { onOpen(null) }, modifier = Modifier.size(32.dp)) {
-                PaperText(if (hiddenSessions > 0) "+$hiddenSessions" else "↗",
+            PaperIconButton(
+                if (hiddenSessions > 0) "Раскрыть панель агентов. Скрытых сессий: $hiddenSessions"
+                else "Раскрыть панель агентов",
+                onClick = { onOpen(null) }, modifier = Modifier.size(32.dp)) {
+                PaperText(if (largeText || hiddenSessions == 0) "↗" else "+$hiddenSessions",
                     role = PaperTextRole.CHROME, color = colors.action)
             }
         }
@@ -323,17 +333,17 @@ private fun CompactSessionRow(session: PaperDockSession, onClick: () -> Unit) {
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp)) {
         PaperActivityIndicator(session.tone, session.statusLabel, running = session.running, size = 10.dp)
         Spacer(Modifier.width(8.dp))
-        PaperText(session.name, Modifier.weight(1f), role = PaperTextRole.CHROME, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.width(8.dp))
-        PaperText(session.statusLabel, Modifier.widthIn(max = 96.dp), role = PaperTextRole.CHROME,
-            color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.weight(1f)) {
+            PaperText(session.name, role = PaperTextRole.CHROME, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            PaperText(session.statusLabel, role = PaperTextRole.CHROME, color = colors.secondaryText,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
 @Composable
 private fun ExpandedDock(
     model: PaperAgentDockModel,
-    indicator: @Composable () -> Unit,
     dragHandle: @Composable (Modifier) -> Unit,
     input: String,
     onInputChange: (String) -> Unit,
@@ -347,8 +357,6 @@ private fun ExpandedDock(
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            indicator()
-            Spacer(Modifier.width(8.dp))
             dragHandle(Modifier.weight(1f).fillMaxHeight())
             PaperButton("Открыть", onOpenMainWindow, kind = PaperButtonKind.QUIET,
                 accessibilityLabel = "Открыть окно MagicPaper")
@@ -397,7 +405,7 @@ private fun SessionChoice(session: PaperDockSession, modifier: Modifier, onSelec
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 PaperText(session.name, role = PaperTextRole.CHROME, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (showSecondary) PaperText(session.activityLabel ?: session.statusLabel, role = PaperTextRole.CHROME,
+                if (showSecondary) PaperText(session.statusLabel, role = PaperTextRole.CHROME,
                     color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -514,7 +522,8 @@ private fun DockMessage(message: PaperDockMessage, onRecovery: (String) -> Unit,
 }
 
 private val previewSessions = listOf(
-    PaperDockSession("one", "Сборка проекта", PaperActivityTone.WORKING, true, true, "Проверяет тесты", "работает"),
+    PaperDockSession("one", "Сборка проекта", PaperActivityTone.WORKING, running = true,
+        selected = true, statusLabel = "работает"),
     PaperDockSession("two", "Окно настроек", PaperActivityTone.ATTENTION, statusLabel = "ждёт ответа", needsYou = true),
     PaperDockSession("three", "Длинное имя сессии для проверки переполнения", PaperActivityTone.UNREAD, statusLabel = "новое"),
 )

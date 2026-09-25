@@ -49,7 +49,7 @@ class PaperAgentDockTest {
         init { registry.currentState = Lifecycle.State.RESUMED }
     }
 
-    @Test fun compactCardKeepsFixedFootprintAndShowsTheFirstThreeAgents() {
+    @Test fun compactCardKeepsFixedFootprintAndShowsTheFirstTwoAgents() {
         val scene = scene(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight, fontScale = 1.2f) {
             Dock(false, {}, PaperAgentDockModel(sessions = sessions, attentionCount = 1))
         }
@@ -58,9 +58,17 @@ class PaperAgentDockTest {
             val texts = onPaperUi { scene.texts() }
             assertTrue("Сборка очень длинного названия проекта" in texts)
             assertTrue("Окно настроек" in texts)
-            assertTrue("Результат" in texts)
+            assertFalse("Результат" in texts)
             assertFalse("Ожидание" in texts)
-            assertTrue("+1" in texts)
+            assertTrue("+2" in texts)
+            val title = onPaperUi { scene.textNode("Сборка очень длинного названия проекта") }
+            val status = onPaperUi { scene.textNode("работает") }
+            assertTrue(status.boundsInRoot.top >= title.boundsInRoot.bottom - 1f,
+                "Session status must sit below its title")
+            val brand = onPaperUi { scene.textNode("⋮⋮ MagicPaper") }
+            val indicator = onPaperUi { scene.descriptionNode("Агенты работают") }
+            assertTrue(indicator.boundsInRoot.left >= brand.boundsInRoot.right - 1f,
+                "The aggregate activity indicator must follow MagicPaper in the title")
             capture(scene, "compact")
         } finally { onPaperUi { scene.close() } }
     }
@@ -73,9 +81,11 @@ class PaperAgentDockTest {
             draw(scene)
             val texts = onPaperUi { scene.texts() }
             assertTrue("Сборка очень длинного названия проекта" in texts)
-            assertTrue("Окно настроек" in texts)
+            assertFalse("Окно настроек" in texts)
             assertFalse("Результат" in texts)
-            assertTrue("+2" in texts)
+            assertTrue("↗" in texts)
+            assertTrue("MagicPaper" in texts)
+            assertTrue(onPaperUi { scene.action("Скрытых сессий: 3").config.contains(SemanticsActions.OnClick) })
             capture(scene, "large-text")
         } finally { onPaperUi { scene.close() } }
     }
@@ -191,6 +201,48 @@ class PaperAgentDockTest {
         } finally { onPaperUi { scene.close() } }
     }
 
+    @Test fun pointerLeavingCollapsesAHoverOpenedPanel() {
+        val expanded = mutableStateOf(false)
+        val scene = scene(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight) {
+            Dock(expanded.value, { expanded.value = it }, PaperAgentDockModel(sessions = sessions))
+        }
+        try {
+            draw(scene)
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(90f, 75f), type = PointerType.Mouse) }
+            draw(scene)
+            Thread.sleep(PaperAgentDockExpandDelayMillis + 80)
+            draw(scene)
+            assertTrue(onPaperUi { expanded.value })
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Exit, Offset(-1f, -1f), type = PointerType.Mouse) }
+            draw(scene)
+            Thread.sleep(PaperAgentDockCollapseDelayMillis + 80)
+            draw(scene)
+            assertFalse(onPaperUi { expanded.value }, "Leaving the card must restore its compact footprint")
+        } finally { onPaperUi { scene.close() } }
+    }
+
+    @Test fun pointerLeavingCollapsesAfterClickingTheExpandAction() {
+        val expanded = mutableStateOf(false)
+        val scene = scene(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight) {
+            Dock(expanded.value, { expanded.value = it }, PaperAgentDockModel(sessions = sessions))
+        }
+        try {
+            draw(scene)
+            onPaperUi {
+                scene.sendPointerEvent(PointerEventType.Move, Offset(270f, 31f), type = PointerType.Mouse)
+                scene.sendPointerEvent(PointerEventType.Press, Offset(270f, 31f), type = PointerType.Mouse)
+                scene.sendPointerEvent(PointerEventType.Release, Offset(270f, 31f), type = PointerType.Mouse)
+            }
+            draw(scene)
+            assertTrue(onPaperUi { expanded.value })
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Exit, Offset(-1f, -1f), type = PointerType.Mouse) }
+            draw(scene)
+            Thread.sleep(PaperAgentDockCollapseDelayMillis + 80)
+            draw(scene)
+            assertFalse(onPaperUi { expanded.value }, "A pointer click must not make expansion sticky")
+        } finally { onPaperUi { scene.close() } }
+    }
+
     @Test fun dragHandleOffersKeyboardMovementWithoutResizing() {
         val expanded = mutableStateOf(false)
         val nudges = mutableListOf<Pair<Float, Float>>()
@@ -245,6 +297,12 @@ class PaperAgentDockTest {
 
     private fun ImageComposeScene.texts(): List<String> = nodes()
         .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }.map { it.text }
+
+    private fun ImageComposeScene.textNode(text: String): SemanticsNode = nodes()
+        .first { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == text } }
+
+    private fun ImageComposeScene.descriptionNode(description: String): SemanticsNode = nodes()
+        .first { description in it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
 
     private fun ImageComposeScene.action(label: String): SemanticsNode = nodes()
         .first { it.config.contains(SemanticsActions.OnClick) &&

@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.awt.ComposeWindow
@@ -56,6 +57,8 @@ import java.awt.GraphicsEnvironment
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.Window
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
@@ -128,8 +131,9 @@ internal fun easeOut(t: Double): Double {
 }
 
 internal enum class DockVisibility { HIDDEN, SHOW_COLLAPSED, KEEP }
-internal fun dockVisibility(wanted: Boolean, windowCreated: Boolean, windowVisible: Boolean): DockVisibility = when {
-    !wanted -> DockVisibility.HIDDEN
+internal fun dockVisibility(wanted: Boolean, ownerForeground: Boolean, windowCreated: Boolean,
+    windowVisible: Boolean): DockVisibility = when {
+    !wanted || ownerForeground -> DockVisibility.HIDDEN
     !windowCreated || !windowVisible -> DockVisibility.SHOW_COLLAPSED
     else -> DockVisibility.KEEP
 }
@@ -165,6 +169,7 @@ internal class DesktopAgentPanel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val snapshot = mutableStateOf<Snapshot?>(null)
     private val expanded = mutableStateOf(false)
+    private val surfaceGeneration = mutableStateOf(0)
     private val drafts = mutableStateMapOf<String, String>()
     private val operationError = mutableStateOf<String?>(null)
     private val selectedSessionId = MutableStateFlow<String?>(null)
@@ -184,7 +189,15 @@ internal class DesktopAgentPanel(
     private var spacesRequested = false
     private var unavailable = false
     private var closed = false
+    // The main window starts in front. Its native activation events control the PiP while
+    // the service keeps running independently of either window's visibility.
+    private var ownerForeground = true
+    private val ownerListener = object : WindowAdapter() {
+        override fun windowActivated(event: WindowEvent) { ownerForeground = true; applyVisibility() }
+        override fun windowDeactivated(event: WindowEvent) { ownerForeground = false; applyVisibility() }
+    }
     init {
+        owner.addWindowListener(ownerListener)
         scope.launch(Dispatchers.IO) {
             val saved = try { placementStore.read(PLACEMENT_KEY) } catch (error: Exception) {
                 AppLog.error("desktop_host", "agent.overlay.placement.read.failed", error)
@@ -214,6 +227,7 @@ internal class DesktopAgentPanel(
 
     override fun close() {
         closed = true
+        owner.removeWindowListener(ownerListener)
         scope.cancel()
         morph?.stop()
         morph = null
@@ -229,8 +243,18 @@ internal class DesktopAgentPanel(
         if (closed || !placementLoaded) return
         val wanted = snapshot.value != null
         val window = overlay
-        when (dockVisibility(wanted, window != null, window?.isVisible == true)) {
-            DockVisibility.HIDDEN -> window?.isVisible = false
+        when (dockVisibility(wanted, ownerForeground, window != null, window?.isVisible == true)) {
+            DockVisibility.HIDDEN -> {
+                morph?.stop()
+                morph = null
+                expanded.value = false
+                if (window?.isVisible == true) {
+                    window.isVisible = false
+                    // Unmount the surface so hover, focus and keyboard-open state cannot leak
+                    // into the next appearance while drafts remain with this service.
+                    surfaceGeneration.value++
+                }
+            }
             DockVisibility.KEEP -> Unit // A streamed update must not close the conversation.
             DockVisibility.SHOW_COLLAPSED -> show()
         }
@@ -260,26 +284,28 @@ internal class DesktopAgentPanel(
         PaperTheme {
             val current = snapshot.value ?: return@PaperTheme
             val sessionId = current.sessionId
-            PaperAgentDock(
-                expanded = expanded.value,
-                onExpandedChange = ::setExpanded,
-                model = current.model.copy(operationError = operationError.value),
-                indicator = { PaperActivityIndicator(current.tone, current.toneLabel,
-                    running = current.running && current.animate, size = 14.dp) },
-                input = drafts[sessionId].orEmpty(),
-                onInputChange = { drafts[sessionId] = it; operationError.value = null },
-                onSend = ::send,
-                onStop = ::stop,
-                onOpenMainWindow = ::restoreOwner,
-                onSelectSession = { selectedSessionId.value = it; operationError.value = null },
-                onRecovery = { recover(it, cancel = false) },
-                onCancelRecovery = { recover(it, cancel = true) },
-                animate = current.animate,
-                onDragStart = ::dragStart,
-                onDragBy = ::dragBy,
-                onDragEnd = ::dragEnd,
-                onNudgeBy = ::nudgeBy,
-            )
+            key(surfaceGeneration.value) {
+                PaperAgentDock(
+                    expanded = expanded.value,
+                    onExpandedChange = ::setExpanded,
+                    model = current.model.copy(operationError = operationError.value),
+                    indicator = { PaperActivityIndicator(current.tone, current.toneLabel,
+                        running = current.running && current.animate, size = 14.dp) },
+                    input = drafts[sessionId].orEmpty(),
+                    onInputChange = { drafts[sessionId] = it; operationError.value = null },
+                    onSend = ::send,
+                    onStop = ::stop,
+                    onOpenMainWindow = ::restoreOwner,
+                    onSelectSession = { selectedSessionId.value = it; operationError.value = null },
+                    onRecovery = { recover(it, cancel = false) },
+                    onCancelRecovery = { recover(it, cancel = true) },
+                    animate = current.animate,
+                    onDragStart = ::dragStart,
+                    onDragBy = ::dragBy,
+                    onDragEnd = ::dragEnd,
+                    onNudgeBy = ::nudgeBy,
+                )
+            }
         }
     }
 
@@ -336,6 +362,8 @@ internal class DesktopAgentPanel(
                 val desktop = Desktop.getDesktop()
                 if (desktop.isSupported(Desktop.Action.APP_REQUEST_FOREGROUND)) desktop.requestForeground(true)
             }
+            ownerForeground = true
+            applyVisibility()
         } catch (error: Exception) {
             operationError.value = "Не удалось открыть окно MagicPaper. Повторите попытку."
             AppLog.error("desktop_host", "agent.overlay.restore.failed", error)
@@ -521,7 +549,6 @@ internal class DesktopAgentPanel(
                     tone = session.status.activityTone,
                     running = session.running || session.draft.active,
                     selected = session.session.id == selected.session.id,
-                    activityLabel = session.pendingQuestion() ?: session.liveDetail(),
                     statusLabel = session.status.label,
                     needsYou = session.status in attentionStatuses,
                 )
