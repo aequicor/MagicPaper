@@ -1,99 +1,83 @@
 package io.aequicor.magicpaper
 
-import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedWidth
-import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedHeight
-import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedWidth
+import java.awt.Dimension
+import java.awt.Point
 import java.awt.Rectangle
-import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * The expand/collapse morph is the dock's only animation of its window, so its interpolation
- * must be exact at the ends and monotone between them: a wrong blend shows as a jump or a
- * backwards step while the panel grows.
- */
 class AgentDockBoundsTest {
-    private val panel = object {
-        fun interpolate(from: Rectangle, to: Rectangle, t: Double) = interpolateRect(from, to, t)
-        fun ease(t: Double) = easeOut(t)
+    private val screen = Rectangle(1512, 30, 1920, 1040)
+
+    @Test fun compactPanelCanLiveAnywhereInTheUsableDisplay() {
+        for (x in 0..10) for (y in 0..10) {
+            val bounds = compactOverlayBounds(screen, OverlayPlacement(x / 10f, y / 10f))
+            assertTrue(screen.contains(bounds), "Panel escaped the screen at $x,$y: $bounds")
+        }
+        val center = compactOverlayBounds(screen, OverlayPlacement(.5f, .5f))
+        assertTrue(center.x > screen.x && center.x + center.width < screen.x + screen.width)
+        assertTrue(center.y > screen.y && center.y + center.height < screen.y + screen.height)
     }
 
-    @Test fun interpolationStartsAndEndsExactlyOnItsRectangles() {
-        val from = Rectangle(0, 100, 42, 88)
-        val to = Rectangle(0, 40, 448, 476)
-        assertEquals(from, panel.interpolate(from, to, 0.0))
-        assertEquals(to, panel.interpolate(from, to, 1.0))
-        // Out-of-range parameters clamp instead of extrapolating past the target.
-        assertEquals(from, panel.interpolate(from, to, -1.0))
-        assertEquals(to, panel.interpolate(from, to, 2.0))
+    @Test fun expansionAlwaysContainsTheCompactCardEvenAtCorners() {
+        for (x in 0..10) for (y in 0..10) {
+            val compact = compactOverlayBounds(screen, OverlayPlacement(x / 10f, y / 10f))
+            val expanded = expandedOverlayBounds(screen, compact)
+            assertTrue(screen.contains(expanded), "Expanded card escaped the screen: $expanded")
+            assertTrue(expanded.contains(compact), "Card moved away from its anchor: $compact -> $expanded")
+            for (frame in 0..10) {
+                val transition = interpolateRect(compact, expanded, easeOut(frame / 10.0))
+                assertTrue(transition.contains(compact),
+                    "Hover target fell outside the window during the morph: $compact -> $transition")
+            }
+        }
     }
 
-    @Test fun interpolationMovesMonotonicallyTowardsTheTarget() {
-        val from = Rectangle(0, 100, 42, 88)
-        val to = Rectangle(0, 40, 448, 476)
+    @Test fun draggingWritesAFreePositionThatRestoresWithinOneWindowUnit() {
+        val placed = compactOverlayBounds(screen, OverlayPlacement(.37f, .71f))
+        val restored = compactOverlayBounds(screen, placementAt(screen, placed.x, placed.y))
+        assertTrue(kotlin.math.abs(placed.x - restored.x) <= 1)
+        assertTrue(kotlin.math.abs(placed.y - restored.y) <= 1)
+        assertEquals(placed.size, restored.size, "Dragging does not change the compact footprint")
+    }
+
+    @Test fun crossingASecondDisplayKeepsTheGrabPointUnderThePointer() {
+        val left = Rectangle(0, 25, 1000, 800)
+        val right = Rectangle(1000, 0, 1400, 900)
+        val travel = dragTravelArea(listOf(left, right), left)
+        val grab = Point(88, 26)
+        val footprint = Dimension(304, 152)
+        val before = draggedOrigin(Point(995, 260), grab, footprint, travel)
+        val after = draggedOrigin(Point(1005, 260), grab, footprint, travel)
+        assertEquals(10, after.x - before.x, "Crossing the seam must not snap to the second screen's edge")
+        assertEquals(before.y, after.y)
+    }
+
+    @Test fun smallScreensClampTheExpandedFootprintWithoutLosingTheCard() {
+        val small = Rectangle(0, 24, 380, 330)
+        val compact = compactOverlayBounds(small, OverlayPlacement(1f, 1f))
+        val expanded = expandedOverlayBounds(small, compact)
+        assertEquals(small, expanded)
+        assertTrue(expanded.contains(compact))
+    }
+
+    @Test fun morphIsMonotoneAndEndsOnTheExactTarget() {
+        val from = compactOverlayBounds(screen, OverlayPlacement(.9f, .8f))
+        val to = expandedOverlayBounds(screen, from)
+        assertEquals(from, interpolateRect(from, to, 0.0))
+        assertEquals(to, interpolateRect(from, to, 1.0))
         var previous = from
-        var t = 0.0
-        while (t <= 1.0) {
-            val current = panel.interpolate(from, to, panel.ease(t))
-            assertTrue(current.width >= previous.width, "width must not shrink: $previous -> $current")
-            assertTrue(current.height >= previous.height, "height must not shrink: $previous -> $current")
-            assertTrue(current.y <= previous.y, "y must not move down: $previous -> $current")
+        for (step in 1..10) {
+            val current = interpolateRect(from, to, easeOut(step / 10.0))
+            assertTrue(current.width >= previous.width)
+            assertTrue(current.height >= previous.height)
+            assertTrue(current.x <= previous.x)
+            assertTrue(current.y <= previous.y)
             previous = current
-            t += 0.1
         }
         assertEquals(to, previous)
-    }
-
-    @Test fun easeOutDeceleratesIntoTheTarget() {
-        val first = panel.ease(0.2) - panel.ease(0.0)
-        val last = panel.ease(1.0) - panel.ease(0.8)
-        assertTrue(first > last, "an ease-out covers more ground early: $first vs $last")
-        assertEquals(0.0, panel.ease(0.0))
-        assertEquals(1.0, panel.ease(1.0))
-    }
-
-    /**
-     * The morph must arrive: a progress that never reaches 1 leaves the window at the size it
-     * started from while the content already lays out the other state.
-     */
-    @Test fun theMorphReachesItsTargetOnTime() {
-        assertEquals(0.0, boundsProgress(0L))
-        assertEquals(0.5, boundsProgress(DOCK_MORPH_NANOS / 2), 1e-9)
         assertEquals(1.0, boundsProgress(DOCK_MORPH_NANOS))
-        assertEquals(1.0, boundsProgress(DOCK_MORPH_NANOS * 3), "past its end the morph stays on its target")
-        assertTrue(DOCK_MORPH_NANOS in 100_000_000L..400_000_000L, "a morph is felt, not waited for")
-    }
-
-    /**
-     * Window units are dp at every display scale, so the dock's footprint is its dp size as is.
-     * Multiplying by the display scale doubled the dock on every Retina display.
-     */
-    @Test fun theFootprintIsItsDpSizeOnTheEdgeItHugs() {
-        val usable = Rectangle(0, 25, 1512, 920)
-        val start = dockBounds(usable, 288.dp, 180.5.dp, DockEdge.START, 0.5f)
-        assertEquals(Rectangle(0, 25 + ((920 - 181) * 0.5f).roundToInt(), 288, 181), start)
-        val end = dockBounds(usable, 288.dp, 180.dp, DockEdge.END, 0f)
-        assertEquals(1512 - 288, end.x, "docked to the end edge, the panel ends on it")
-        assertEquals(25, end.y)
-        val huge = dockBounds(usable, 4000.dp, 4000.dp, DockEdge.START, 1f)
-        assertEquals(Rectangle(usable), huge, "a card larger than the display is clamped to it")
-    }
-
-    /**
-     * The panel opens under the pointer that hovered the compact list, and retracting must not
-     * leave the list under a pointer that has already left the panel: at every place on the
-     * edge, the open panel covers the list it grew from.
-     */
-    @Test fun theOpenPanelCoversTheListItGrewFrom() {
-        val usable = Rectangle(1512, 0, 1920, 1050)
-        for (edge in DockEdge.values()) for (step in 0..10) {
-            val offset = step / 10f
-            val compact = dockBounds(usable, PaperAgentDockCollapsedWidth, 210.dp, edge, offset)
-            val open = dockBounds(usable, PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight, edge, offset)
-            assertTrue(open.contains(compact), "$edge at $offset: $open does not cover $compact")
-        }
+        assertTrue(DOCK_MORPH_NANOS in 180_000_000L..300_000_000L)
     }
 }

@@ -128,13 +128,14 @@ public fun PaperAction(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     contentPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+    accessibilityLabel: String? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val policy = LocalPaperPlatformPolicy.current
     Surface(
         modifier = modifier.heightIn(min = policy.density.controlHeight)
-            .semantics { role = Role.Button }
-            .paperClickable(enabled = enabled, onClick = onClick),
+            .semantics { role = Role.Button; accessibilityLabel?.let { contentDescription = it } }
+            .paperClickable(enabled = enabled, onClickLabel = accessibilityLabel, onClick = onClick),
         color = Color.Transparent,
         shape = RoundedCornerShape(6.dp),
     ) {

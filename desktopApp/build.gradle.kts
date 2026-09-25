@@ -16,7 +16,7 @@ plugins {
 dependencies {
     implementation(project(":app"))
     implementation(project(":designSystem"))
-    // The docked agent panel reuses the sidebar's own status dot and labels, so one session
+    // The floating agent panel reuses the sidebar's own status dot and labels, so one session
     // never reads as two different states. :app keeps this module implementation-private.
     implementation(project(":magic-common:transcript"))
     implementation(libs.androidx.lifecycle.viewmodelCompose)

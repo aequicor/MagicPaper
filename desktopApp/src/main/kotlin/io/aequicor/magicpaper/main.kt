@@ -229,15 +229,14 @@ private fun runMagicPaperWindow(
             }
             val feedback = remember(window) { DesktopComputerFeedback() }
             DisposableEffect(feedback) { onDispose { feedback.close() } }
-            // Docked agent panel: an always-on-top tab on the screen edge while this window is
-            // minimized or unfocused and some session still works or waits for the reader.
-            // The panel observes the owner window and decides its own visibility.
+            // Floating agent panel: an always-on-top status card while sessions
+            // have work or results to report, independent of the main window's focus.
             val agentPanel = remember(window, runtime) {
                 DesktopAgentPanel(
                     owner = window,
                     coding = runtime.koin.get<io.aequicor.magicpaper.ui.CodingService>(),
                     settings = runtime.koin.get<io.aequicor.magicpaper.ui.SettingsService>(),
-                    placement = runtime.koin.get<io.aequicor.magicpaper.data.storage.KeyValueStore>(),
+                    placementStore = runtime.koin.get<io.aequicor.magicpaper.data.storage.KeyValueStore>(),
                 )
             }
             DisposableEffect(agentPanel) { onDispose { agentPanel.close() } }
