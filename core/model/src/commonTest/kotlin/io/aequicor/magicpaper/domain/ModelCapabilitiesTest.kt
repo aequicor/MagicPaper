@@ -8,6 +8,15 @@ import kotlin.test.assertTrue
 
 class ModelCapabilitiesTest {
     @Test
+    fun gpt6ModelsAcceptImageInput() {
+        for (provider in listOf(ProviderType.OPENAI_SUBSCRIPTION, ProviderType.OPENAI_COMPATIBLE)) {
+            for (id in listOf("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")) {
+                assertTrue(ModelCapabilities.resolve(provider, id).vision, "$provider $id")
+            }
+        }
+    }
+
+    @Test
     fun multimodalQwenSnapshotSupportsImagesAndToolResultCompatibility() {
         val capabilities = ModelCapabilities.resolve(
             ProviderType.OPENAI_COMPATIBLE,

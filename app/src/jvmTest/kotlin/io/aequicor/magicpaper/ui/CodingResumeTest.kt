@@ -16,6 +16,26 @@ class CodingResumeTest {
         codingModelId = "qwen3.7-max", baseUrl = "https://token-intl.aliyuncs.com/compatible-mode/v1",
         provider = ProviderType.OPENAI_COMPATIBLE, modelLibraryVersion = 1)
 
+    @Test fun gpt6SolImageStartsCodingRun() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val profile = LlmProfile("sol", "GPT-6 Sol", modelId = "gpt-6-sol", codingModelId = "gpt-6-sol",
+                provider = ProviderType.OPENAI_SUBSCRIPTION)
+            val f = ModelSettingsFixture(); f.seed(); f.profiles.save(profile)
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project); repo.saveSession(session.copy(llmProfileId = profile.id))
+            val runtime = Runtime().apply { gate.complete(Unit) }
+            val opened = f.prepareCoding(runtime, repo); service = opened; runCurrent()
+
+            opened.sendCodingPromptTo(session.id, "Что изображено?", listOf(image)); runCurrent()
+
+            assertEquals(1, runtime.calls.size)
+            assertEquals(listOf(image), runtime.attachments.single())
+            assertNull(opened.state.value.notice)
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun unsupportedImageKeepsDraftAndCanBeSentAfterSelectingVisionModel() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var service: DefaultCodingService? = null

@@ -183,8 +183,8 @@ exit 1""")
         }
     }
 
-    @Test fun expiredOAuthTokenOffersSignInAndDowngradesTheReportedAccount() = kotlinx.coroutines.runBlocking {
-        if (windows) return@runBlocking
+    @Test fun expiredOAuthTokenOffersSignInAndDowngradesTheReportedAccount() = nativeRunBlocking {
+        if (windows) return@nativeRunBlocking
         fixture().use { f ->
             f.script("""
 case "${'$'}1" in

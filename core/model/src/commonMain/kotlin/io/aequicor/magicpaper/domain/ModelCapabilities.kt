@@ -89,7 +89,7 @@ data class ModelCapabilities(
          *  - Qwen: VL-ряд, мультимодальный снимок `qwen3.7-max-2026-06-08`,
          *    Plus/Flash и новые мультимодальные Max;
          *  - Claude 3+ (Haiku 3, Sonnet 3/4/5, Opus 3/4);
-         *  - GPT-4 и новее (gpt-4*, gpt-5*, o-серия);
+         *  - GPT-4 и новее (gpt-4*, gpt-5*, gpt-6*, o-серия);
          *  - Gemini (все поколения мультимодальные);
          *  - GLM-4V и новее, а также GLM-5.3-Flash (без «v» в имени);
          *  - Grok с vision;
@@ -104,7 +104,7 @@ data class ModelCapabilities(
             (provider == ProviderType.ANTHROPIC || provider == ProviderType.ANTHROPIC_SUBSCRIPTION) &&
                 id.removeSuffix("[1m]") in CLAUDE_CODE_ALIASES -> true
             // GPT-4+, o-серия
-            id.startsWith("gpt-4") || id.startsWith("gpt-5") ||
+            id.startsWith("gpt-4") || id.startsWith("gpt-5") || id.startsWith("gpt-6") ||
                 id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> true
             // Gemini (все поколения мультимодальные)
             family == "gemini" -> true
