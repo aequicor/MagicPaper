@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.data.coding.backendCatalog
-import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.domain.CodingEngine
 
@@ -17,7 +16,7 @@ fun NewCodingSessionDialog(engine: CodingEngine, onEngineChange: (CodingEngine) 
     PaperDialog("Новая сессия", onDismiss, confirmLabel = "Создать сессию", onConfirm = onCreate,
         confirmEnabled = loaded && !busy, dismissLabel = "Отмена", onDismissAction = onCancel, dismissEnabled = !busy) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            PaperText("Выберите движок для этой сессии. Позже его можно сменить в меню сессии; история сохранится.")
+            PaperText("Выберите движок для этой сессии. Позже его можно сменить в параметрах сессии; история сохранится.")
             NativeEngineChoices(backendCatalog.descriptors, engine, enabled = loaded && !busy, onSelect = onEngineChange)
             backendCatalog.descriptors.firstOrNull { it.engine == engine }?.let { PaperText(it.summary, role = PaperTextRole.LABEL) }
             if (!loaded && error == null) PaperText("Загрузка…", role = PaperTextRole.LABEL)

@@ -56,7 +56,7 @@ fun EnginesSettings(vm: NativeSettingsComponent, state: SettingsState) {
         PaperText("Движки", role = PaperTextRole.HEADLINE)
         PaperText("Движок новых сессий", role = PaperTextRole.TITLE)
         NativeEngineChoices(vm.engines, state.settings.defaultCodingEngine) { vm.saveSettings(state.settings.copy(defaultCodingEngine = it)) }
-        PaperText("Этот вариант предлагается при создании сессии. Движки существующих сессий сохраняются.", role = PaperTextRole.LABEL)
+        PaperText("Этот вариант предлагается при создании сессии. Движок существующей сессии можно сменить в её параметрах.", role = PaperTextRole.LABEL)
         PaperButton("Управление компьютером", vm::openComputerSettings, kind = PaperButtonKind.QUIET)
         vm.engines.forEach { descriptor ->
             val engine = descriptor.engine
