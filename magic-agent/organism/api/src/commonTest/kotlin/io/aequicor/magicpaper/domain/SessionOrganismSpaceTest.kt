@@ -28,9 +28,8 @@ import kotlin.test.assertTrue
  * values address it (or the records built around it) by the ids below; the deleted organism is the one exception, because
  * deleting history bumps the generation.
  *
- * Every position stands on a root running under a CODE authority. The ones that concern an intervention or a quarantine need a
- * diagnosis, and a diagnosis needs an immunity session, which a root that belongs to a plan has whether or not it plans; they
- * are built on such a root, so the authority the inputs carry is the one the root holds.
+ * Every position stands on a root running under a CODE authority. Intervention and quarantine representatives retain
+ * a saved immunity session from an earlier planning mode, as an older aggregate may do after changing modes.
  */
 class SessionOrganismSpaceTest {
     private var sequence = 0
@@ -38,7 +37,7 @@ class SessionOrganismSpaceTest {
 
     private val rules = PlanningRulesSnapshot("1", "rules")
     private val rootSession = CodingSession("root", "project", "Root", 1, runtimeGeneration = 1, planningRulesSnapshot = rules)
-    private val immunityOwner = rootSession.copy(planId = "plan")
+    private val immunityOwner = rootSession.copy(planningMode = true, planId = "plan", runtimeGeneration = 0)
     private val scope = SessionAuthority("project", "root", "root", 1, CodingInteractionMode.CODE)
 
     private fun step(state: SessionOrganismMachine.State, vararg inputs: SessionOrganismMachine.Input) = inputs.fold(state) { current, input ->
@@ -100,6 +99,7 @@ class SessionOrganismSpaceTest {
     private val persistenceUnknown = step(running, Fact.PersistenceUnknown(stamp()))
 
     private val immunityRunning = step(initial, Fact.Adopt(stamp(), "project", immunityOwner, emptyList(), OrganismLimits()),
+        Intent.ChangeRootMode(stamp(), "root", "root", CodingInteractionMode.CODE),
         Intent.BeginRun(stamp(), "root", "root"))
     private fun diagnosed(state: SessionOrganismMachine.State, target: String) = step(state,
         Intent.Command(stamp(), scope, "signal", OrganismCommand(OrganismAction.SIGNAL, target, reason = "Stuck"), "fp-signal"),
@@ -533,8 +533,9 @@ class SessionOrganismSpaceTest {
      * A missing record counts as a refusal, as it does for the harness.
      */
     @Test fun anOrganismThatOwnsAnImmunitySessionAnswersLikeOneThatDoesNot() {
-        // Every organism that belongs to a plan, a stage or planning owns an immunity session, and the session never starts.
-        val immunityPending = step(initial, Fact.Adopt(stamp(), "project", immunityOwner, emptyList(), OrganismLimits()))
+        // An older aggregate can retain its dormant immunity after leaving planning.
+        val immunityPending = step(initial, Fact.Adopt(stamp(), "project", immunityOwner, emptyList(), OrganismLimits()),
+            Intent.ChangeRootMode(stamp(), "root", "root", CodingInteractionMode.CODE))
         val immunityFinished = step(immunityRunning, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.COMPLETED))
         val immunityStopping = step(immunityRunning, Intent.RequestUserStop(stamp(), "root", "root", "stop-immunity-root", false))
         val alternatives = mapOf(

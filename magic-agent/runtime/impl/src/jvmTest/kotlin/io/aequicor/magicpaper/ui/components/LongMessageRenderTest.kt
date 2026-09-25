@@ -67,6 +67,11 @@ class LongMessageRenderTest {
                     scene.sendPointerEvent(PointerEventType.Release, node.boundsInRoot.center)
                 }
                 render()
+                val previewDeadline = System.nanoTime() + 10_000_000_000L
+                while (onUi { "Читать далее" !in scene.texts() } && System.nanoTime() < previewDeadline) {
+                    onUi { scene.render(++frame * 32_000_000L).close() }
+                    Thread.sleep(10)
+                }
                 click("Читать далее")
                 render()
                 assertTrue(list.layoutInfo.totalItemsCount > 500, "$role must be split into lazy items")

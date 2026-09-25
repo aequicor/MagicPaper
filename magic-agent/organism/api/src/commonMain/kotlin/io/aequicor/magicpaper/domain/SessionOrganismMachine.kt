@@ -315,9 +315,9 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
             current?.let { require(it.id == id && it.projectId == projectId && root.projectId == projectId) { "Другой проект" }; return@run it }
             require(root.projectId == projectId && descendants.all { it.projectId == projectId }) { "Другой проект" }
             limits.validate()
-            // Иммунитет создаётся только для режима планирования (план, этапы, планирование).
-            // Режим исследования — обычный режим с защитой от записи, иммунитет не нужен.
-            val needsImmunity = root.planningMode || root.planId != null || root.stageId != null
+            // Only a planning root orchestrates children. Plan and stage metadata on a
+            // worker must not give that worker an independent immunity session.
+            val needsImmunity = root.planningMode
             val immunity = if (needsImmunity) "$id-immunity" else null
             val migrated = (listOf(root) + descendants).distinctBy { it.id }
             if (immunity != null) require(migrated.none { it.id == immunity }) { "Идентификатор иммунитета занят" }
@@ -590,9 +590,17 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
             if (node.mode == mode) return@run old
             val changed = node.copy(mode = mode, generation = node.generation + 1, previousGeneration = node.generation,
                 version = node.version + 1, observed = SessionObservedState.PENDING, desired = SessionDesiredState.RUN)
-            commit(old.copy(version = old.version + 1, sessions = old.sessions + (sessionId to changed),
+            val newImmunityId = "$id-immunity".takeIf { mode == CodingInteractionMode.PLANNING && old.immunityId == null }
+            require(newImmunityId == null || newImmunityId !in old.sessions) { "Идентификатор иммунитета занят" }
+            val newImmunity = newImmunityId?.let { immunityId -> SessionNode(immunityId, SessionKind.IMMUNITY, "Иммунитет",
+                remainingTokens = if (old.limits.tokens == null) 0 else old.limits.recoveryTokens,
+                rules = changed.rules, lastObservedAt = clock()) }
+            val updatedSessions = old.sessions + (sessionId to changed) +
+                (if (newImmunity != null) mapOf(newImmunity.id to newImmunity) else emptyMap())
+            commit(old.copy(version = old.version + 1, immunityId = newImmunityId ?: old.immunityId,
+                sessions = updatedSessions,
                 outbox = old.outbox.map { if (it.recipient == sessionId && it.state != SessionDeliveryState.PROCESSED) it.copy(state = SessionDeliveryState.CANCELLED) else it },
-                audit = old.audit + SessionAuditEvent("mode-$sessionId-${changed.generation}", "USER", "CHANGE_MODE", setOf(sessionId), "${node.mode} → $mode", clock())))
+                audit = old.audit + SessionAuditEvent("mode-$sessionId-${changed.generation}", "USER", "CHANGE_MODE", setOfNotNull(sessionId, newImmunityId), "${node.mode} → $mode", clock())))
         }
     
         /** A fresh explicit human request may reopen a confirmed stopped root, retaining its budget.

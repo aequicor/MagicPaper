@@ -15,7 +15,7 @@ class SessionOrganismExtensionsTest {
         val rules = PlanningRulesSettings().snapshot()
         lateinit var organism: SessionOrganism
         suspend fun init() {
-            organism = store.adopt("p", CodingSession("root", "p", "Root", 1, researchMode = true, planId = "fixture-plan",
+            organism = store.adopt("p", CodingSession("root", "p", "Root", 1, planningMode = true, planId = "fixture-plan",
                 planningRulesSnapshot = rules), emptyList())
             store.beginRun(organism.id, "root")
         }

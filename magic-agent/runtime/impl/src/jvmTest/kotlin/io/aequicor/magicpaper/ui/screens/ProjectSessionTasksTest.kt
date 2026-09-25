@@ -17,6 +17,22 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ProjectSessionTasksTest {
+    @Test fun savedImmunityIsNotPresentedForAnOrdinaryRoot() {
+        val root = session("root", kind = SessionKind.ZYGOTE).let {
+            it.copy(session = it.session.copy(planningMode = false))
+        }
+        val immunity = session("immunity", kind = SessionKind.IMMUNITY).copy(failedRequest = true)
+        val organism = organism("organism", "root", "immunity", 1).let {
+            it.copy(sessions = it.sessions + ("root" to it.sessions.getValue("root").copy(mode = CodingInteractionMode.CODE)))
+        }
+        val ui = CodingUi(organisms = mapOf(organism.id to organism), sessions = listOf(root, immunity))
+
+        val task = ui.projectSessionTasks("project").single()
+        assertNull(task.organismId)
+        assertNull(task.immunityId)
+        assertEquals(listOf("root"), task.ids())
+    }
+
     @Test fun ordinaryConversationKeepsItsRowAfterAutomaticLifecycleAdoption() {
         val initial = session("root", organism = null, kind = null, name = "My conversation")
         val root = initial.copy(session = initial.session.copy(organismId = "organism", sessionKind = SessionKind.ZYGOTE))

@@ -97,6 +97,25 @@ class UnifiedSessionFeedRenderTest {
         assertEquals("leaf", items.single().children.single().children.single().id)
     }
 
+    @Test fun oldOrdinaryImmunityDoesNotAppearInUnifiedSidebar() {
+        val root = io.aequicor.magicpaper.ui.CodingSessionUi(io.aequicor.magicpaper.domain.CodingSession(
+            "root", "project", "Ordinary", 1L, organismId = "organism", sessionKind = io.aequicor.magicpaper.domain.SessionKind.ZYGOTE))
+        val immunity = io.aequicor.magicpaper.ui.CodingSessionUi(io.aequicor.magicpaper.domain.CodingSession(
+            "immunity", "project", "Иммунитет", 2L, organismId = "organism"))
+        val organism = io.aequicor.magicpaper.domain.SessionOrganism("organism", "project", "root", "immunity", 1L,
+            sessions = mapOf(
+                "root" to io.aequicor.magicpaper.domain.SessionNode("root", io.aequicor.magicpaper.domain.SessionKind.ZYGOTE, "Ordinary"),
+                "immunity" to io.aequicor.magicpaper.domain.SessionNode("immunity", io.aequicor.magicpaper.domain.SessionKind.IMMUNITY, "Иммунитет")))
+        val coding = io.aequicor.magicpaper.ui.CodingUi(sessions = listOf(root, immunity), organisms = mapOf(organism.id to organism))
+        var items = emptyList<UnifiedSidebarItem>()
+        ImageComposeScene(1, 1) {
+            items = rememberNativeSidebarItems(coding, null, true, remember { SessionRecencyTracker { 20L } })
+        }.use { it.settle() }
+
+        assertEquals(listOf("root"), items.map { it.id })
+        assertNull(items.single().immunity)
+    }
+
     @Test fun restoredScrollPinsOneLevelSessionHeaders() {
         val state = LazyListState(firstVisibleItemIndex = 8)
         ImageComposeScene(320, 520) {

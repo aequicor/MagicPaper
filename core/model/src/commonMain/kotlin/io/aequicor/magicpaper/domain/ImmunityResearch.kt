@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.domain
 
 /** Only new explicitly routed signals request research; old logs never acquire execution intent. */
 fun SessionOrganism.nextImmunityResearch(session: CodingSession, history: List<CodingMessage>): ImmunitySignal? {
+    if (sessions[zygoteId]?.mode != CodingInteractionMode.PLANNING) return null
     if (session.id != immunityId || session.sessionKind != SessionKind.IMMUNITY || session.pendingRun != null ||
         session.archived || deletedAt != null || stoppedByUser || immunityId in historyDeletedIds) return null
     val node = sessions[immunityId] ?: return null

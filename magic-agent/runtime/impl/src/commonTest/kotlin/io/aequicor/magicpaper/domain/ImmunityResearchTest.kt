@@ -36,6 +36,9 @@ class ImmunityResearchTest {
             ImmunityDiagnosis("old", "root", emptyList(), "NO_INTERVENTION", setOf("root"), 1),
             ImmunityDiagnosis("new", "root", emptyList(), "NO_INTERVENTION", setOf("root"), 2)))
         assertEquals(requested, organism.nextImmunityResearch(session, emptyList()))
+        val oldOrdinary = organism.copy(sessions = organism.sessions +
+            (organism.zygoteId to organism.sessions.getValue(organism.zygoteId).copy(mode = CodingInteractionMode.CODE)))
+        assertNull(oldOrdinary.nextImmunityResearch(session, emptyList()))
         assertNull(organism.nextImmunityResearch(session.copy(pendingRun = CodingRunCheckpoint("signal-new", "test", intent = ExecutionIntent.STOP)), emptyList()))
         assertNull(organism.nextImmunityResearch(session, listOf(CodingMessage("immunity-report-new", CodingRole.AGENT, "Failure", createdAt = 3, failed = true))))
         assertNull(organism.copy(stoppedByUser = true).nextImmunityResearch(session, emptyList()))

@@ -18,6 +18,9 @@ internal fun rememberNativeSidebarItems(
     val immunityByZygote = remember(coding.organisms, coding.sessions, selectedId, viewingCoding) {
         val result = mutableMapOf<String, ImmunityInfo>()
         coding.organisms.values.forEach { organism ->
+            val rootMode = organism.sessions[organism.zygoteId]?.mode
+            if (rootMode != CodingInteractionMode.PLANNING &&
+                coding.sessions.none { it.session.id == organism.zygoteId && it.session.planningMode }) return@forEach
             val immId = organism.immunityId ?: return@forEach
             val immSession = coding.sessions.firstOrNull { it.session.id == immId } ?: return@forEach
             result[organism.zygoteId] = ImmunityInfo(
@@ -33,6 +36,7 @@ internal fun rememberNativeSidebarItems(
         // A repeated session would repeat its lazy-list key, which Compose rejects.
         val allSessions = coding.sessions.distinctBy { it.session.id }
         val sessionById = allSessions.associateBy { it.session.id }
+        val immunityIds = coding.organisms.values.mapNotNull { it.immunityId }.toSet()
         // Группируем участников по организмам.
         val organismMemberIds = mutableMapOf<String, MutableSet<String>>()
         coding.organisms.values.forEach { organism ->
@@ -66,7 +70,7 @@ internal fun rememberNativeSidebarItems(
             for (childId in childIdsOf(parentId).filter { it !in excludeIds }) {
                 val childUi = sessionById[childId] ?: continue
                 val children = collectVisibleChildren(childId, excludeIds + parentId + childId)
-                if (childUi.session.archived || childUi.session.sessionKind == SessionKind.IMMUNITY) {
+                if (childUi.session.archived || childUi.session.sessionKind == SessionKind.IMMUNITY || childId in immunityIds) {
                     // Архивный родитель скрыт, но его дети показаны.
                     result.addAll(children)
                     continue
@@ -86,7 +90,7 @@ internal fun rememberNativeSidebarItems(
             return result.sortedWith(unifiedSidebarItemComparator)
         }
         // Корневые элементы: зиготы организмов и автономные сессии без родителя.
-        val visible = allSessions.filter { !it.session.archived && it.session.sessionKind != SessionKind.IMMUNITY }
+        val visible = allSessions.filter { !it.session.archived && it.session.sessionKind != SessionKind.IMMUNITY && it.session.id !in immunityIds }
         fun hasVisibleAncestor(id: String): Boolean {
             fun parentOf(childId: String): String? = if (membership[childId] != null) organismParents[childId]
                 else sessionById[childId]?.session?.parentSessionId
@@ -94,7 +98,7 @@ internal fun rememberNativeSidebarItems(
             var parent = parentOf(id)
             while (parent != null && visited.add(parent)) {
                 val session = sessionById[parent]?.session ?: return false
-                if (!session.archived && session.sessionKind != SessionKind.IMMUNITY) return true
+                if (!session.archived && session.sessionKind != SessionKind.IMMUNITY && parent !in immunityIds) return true
                 parent = parentOf(parent)
             }
             return false
@@ -156,4 +160,3 @@ internal fun rememberNativeSidebarItems(
     }
     return codingItems
 }
-

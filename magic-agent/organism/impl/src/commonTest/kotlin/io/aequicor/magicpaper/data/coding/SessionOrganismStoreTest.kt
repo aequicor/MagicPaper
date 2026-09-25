@@ -71,7 +71,7 @@ class SessionOrganismStoreTest {
         val store = DefaultSessionOrganismStore(storage, journal) { 1_000 }
         lateinit var organism: SessionOrganism
         suspend fun initialize(limits: OrganismLimits = OrganismLimits(tokens = 1_000, recoveryTokens = 100)) {
-            val root = CodingSession("root", "project", "Зигота", 1, researchMode = true, planId = "fixture-plan",
+            val root = CodingSession("root", "project", "Зигота", 1, planningMode = true, planId = "fixture-plan",
                 planningRulesSnapshot = PlanningRulesSettings().snapshot())
             organism = store.adopt("project", root, emptyList(), limits)
             store.beginRun(organism.id, root.id)

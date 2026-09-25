@@ -30,7 +30,7 @@ class ImmunityInterventionTest {
         suspend fun initialize(limits: OrganismLimits = OrganismLimits()) {
             settings.save(settings.load().copy(agentLimits = limits))
             projects.createTestProject(project)
-            val root = CodingSession("root", "p", "Root", 1, engine = CodingEngine.PI, researchMode = true, planId = "fixture-plan", piSessionId = "old-native",
+            val root = CodingSession("root", "p", "Root", 1, engine = CodingEngine.PI, planningMode = true, planId = "fixture-plan", piSessionId = "old-native",
                 planningRulesSnapshot = settings.load().planningRules.snapshot())
             projects.createTestSession(root)
             id = service.ensure(root).id

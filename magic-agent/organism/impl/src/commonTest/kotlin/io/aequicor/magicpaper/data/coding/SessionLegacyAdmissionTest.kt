@@ -11,6 +11,29 @@ import kotlin.test.*
 class SessionLegacyAdmissionTest {
     private fun session(id: String, parent: String? = null) = CodingSession(id, "project", id, 1, parentSessionId = parent)
 
+    @Test fun workerMetadataDoesNotCreateAnImmunitySession() = runTest {
+        val store = DefaultSessionOrganismStore(InMemoryKeyValueStore(), InMemoryEventJournal()) { 1_000 }
+        val worker = session("worker").copy(planId = "plan", stageId = "stage", role = CodingSessionRole.WORKER)
+
+        val saved = store.adopt("project", worker, emptyList())
+
+        assertNull(saved.immunityId)
+        assertEquals(setOf("worker"), saved.sessions.keys)
+    }
+
+    @Test fun enteringPlanningAfterOrdinaryAdoptionCreatesOneImmunitySession() = runTest {
+        val store = DefaultSessionOrganismStore(InMemoryKeyValueStore(), InMemoryEventJournal()) { 1_000 }
+        val adopted = store.adopt("project", session("root"), emptyList(),
+            OrganismLimits(tokens = 1_000, recoveryTokens = 100))
+        assertNull(adopted.immunityId)
+
+        val planning = store.changeRootMode(adopted.id, "root", CodingInteractionMode.PLANNING)
+        assertEquals("root-immunity", planning.immunityId)
+        assertEquals(SessionKind.IMMUNITY, planning.sessions.getValue("root-immunity").kind)
+        assertEquals(100L, planning.sessions.getValue("root-immunity").remainingTokens)
+        assertEquals(planning, store.changeRootMode(adopted.id, "root", CodingInteractionMode.PLANNING))
+    }
+
     @Test fun migratedPendingHistoryCannotOverbookActualRuntimeSlots() = runTest {
         val store = DefaultSessionOrganismStore(InMemoryKeyValueStore(), InMemoryEventJournal()) { 1_000 }
         val children = (1..6).map { session("child-$it", "root") }

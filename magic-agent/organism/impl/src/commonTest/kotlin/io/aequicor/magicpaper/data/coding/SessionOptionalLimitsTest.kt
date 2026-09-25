@@ -19,7 +19,7 @@ class SessionOptionalLimitsTest {
         lateinit var initial: SessionOrganism
         suspend fun initialize() {
             initial = store.adopt("project", CodingSession("root", "project", "Task", now,
-                researchMode = true, planId = "fixture-plan", planningRulesSnapshot = PlanningRulesSettings().snapshot()), emptyList(), limits)
+                planningMode = true, planId = "fixture-plan", planningRulesSnapshot = PlanningRulesSettings().snapshot()), emptyList(), limits)
             store.beginRun(initial.id, "root")
         }
         suspend fun authority(id: String = "root"): SessionAuthority {

@@ -83,7 +83,7 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    quarantine, keep it unknown until the runtime reports it stopped. The position after a stop is `stopping` either way, so the
  *    row cannot show the difference. It is a recorded debt, not a decision, and is pinned by
  *    `aStopRequestClearsAnUnknownRunOnlyWhereNoQuarantineAndNoFailureKeepsIt`;
- *  - the immunity session. Every organism that belongs to a plan, a stage or planning has one, and the representatives are built
+ *  - the immunity session. Only a planning root has one, including one switched into planning after adoption; the representatives are built
  *    on such a root wherever a diagnosis is needed, and on one that has none everywhere else. It never starts in practice, and
  *    `DeleteHistoryByUser` counts it as settled for that reason, as `RequestUserStop` does; one that is running is not, and
  *    refuses a deletion that the row accepts;

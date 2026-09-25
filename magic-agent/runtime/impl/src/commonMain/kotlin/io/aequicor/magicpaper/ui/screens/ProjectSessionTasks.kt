@@ -27,9 +27,8 @@ internal data class ProjectSessionTask(
     fun visibleRows(collapsed: Set<String>): List<ProjectSessionTreeRow> {
         // Зигота и иммунитет исключены из дерева — они отображаются отдельно.
         // Зигота открывается по клику на заголовок задачи, иммунитет — ромбик рядом с архивом.
-        // Для обычных сессий (без иммунитета) rootId — это сама сессия, не фильтруем её
-        // Для сессий с иммунитетом (режим планирования) исключаем зиготу и иммунитет
-        val excludeIds = if (immunityId == null) emptySet() else setOfNotNull(rootId, immunityId)
+        // Автономная сессия остаётся строкой; у группы организма корень уже показан в заголовке.
+        val excludeIds = if (organismId == null) emptySet() else setOfNotNull(rootId, immunityId)
         // Build the forest after removing header-owned sessions. Their children
         // become visible roots instead of remaining attached to an omitted row.
         val rows = sessions.filterNot { it.session.id in excludeIds }
@@ -93,34 +92,27 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
             val organism = projectOrganisms[organismId]
             val allMembers = own.filter { membership[it.session.id] == organismId }
             val allMemberIds = allMembers.map { it.session.id }.toSet()
-            val workMembers = allMembers.filter { it.session.sessionKind != SessionKind.IMMUNITY }
+            val savedImmunityId = organism?.immunityId
+                ?: allMembers.firstOrNull { it.session.sessionKind == SessionKind.IMMUNITY }?.session?.id
+            val workMembers = allMembers.filter { it.session.id != savedImmunityId && it.session.sessionKind != SessionKind.IMMUNITY }
             val rootId = organism?.zygoteId
                 ?: allMembers.firstOrNull { it.session.sessionKind == SessionKind.ZYGOTE }?.session?.id
                 ?: workMembers.filter { it.session.parentSessionId !in allMemberIds }
                     .minByOrNull { it.session.createdAt }?.session?.id
                 ?: workMembers.minByOrNull { it.session.createdAt }?.session?.id
-            val immunityId = organism?.immunityId
-                ?: allMembers.firstOrNull { it.session.sessionKind == SessionKind.IMMUNITY }?.session?.id
             val root = byId[rootId]
             val title = root?.session?.sidebarTitle() ?: organism?.sessions?.get(rootId)?.name ?: "Задача"
-            val immunity = byId[immunityId]
-            // Automatic lifecycle adoption is invisible for a standalone conversation.
-            // Keep real plans, delegated work and diagnostic history reachable.
-            // Иммунитет активен только для сессий в режиме планирования.
             val isPlanningSession = root?.session?.planningMode == true ||
-                organism?.sessions?.get(rootId)?.mode == CodingInteractionMode.PLANNING ||
-                root?.session?.planId != null || root?.session?.stageId != null
-            val hasNoActiveImmunity = !isPlanningSession || immunity == null || (!immunity.running && !immunity.draft.active && !immunity.awaitingUser &&
-                !immunity.failedRequest && !immunity.interruptedRequest &&
-                immunity.messages.none { !it.systemContext })
-            val standalone = root != null && !root.session.planningMode && root.plan == null &&
-                organism?.sessions?.get(rootId)?.mode != CodingInteractionMode.PLANNING &&
-                root.session.planId == null && root.session.stageId == null &&
-                allMembers.all { it.session.id == rootId || (immunityId != null && it.session.id == immunityId) } &&
-                organism?.sessions?.keys.orEmpty().all { it == rootId || (immunityId != null && it == immunityId) } &&
-                organism?.signals.orEmpty().isEmpty() && organism?.diagnoses.orEmpty().isEmpty() &&
-                organism?.interventions.orEmpty().isEmpty() &&
-                hasNoActiveImmunity
+                organism?.sessions?.get(rootId)?.mode == CodingInteractionMode.PLANNING
+            val immunityId = savedImmunityId.takeIf { isPlanningSession }
+            val displayMembers = if (isPlanningSession) members else members.filterNot {
+                it.session.id == savedImmunityId || it.session.sessionKind == SessionKind.IMMUNITY
+            }
+            if (displayMembers.isEmpty()) return@forEach
+            // Preserve old immunity history in storage without presenting it as part of an ordinary conversation.
+            val standalone = root != null && !isPlanningSession &&
+                workMembers.all { it.session.id == rootId } &&
+                organism?.sessions?.keys.orEmpty().all { it == rootId || it == savedImmunityId }
             if (standalone && root.session.archived.not()) {
                 tasks += OrderedTask(ProjectSessionTask("session-$rootId", title, null, rootId, listOf(root)),
                     root.session.createdAt, inputOrder[rootId] ?: Int.MAX_VALUE)
@@ -128,12 +120,12 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
             }
             val task = ProjectSessionTask(
                 key = "task-$organismId", title = title, organismId = organismId, rootId = rootId,
-                sessions = members, immunityId = immunityId,
-                parentIds = members.associate { item ->
+                sessions = displayMembers, immunityId = immunityId,
+                parentIds = displayMembers.associate { item ->
                     val node = organism?.sessions?.get(item.session.id)
                     item.session.id to if (node != null) node.originParentId else item.session.parentSessionId
                 },
-                immunityProposalPending = organism?.let { it.deletedAt == null &&
+                immunityProposalPending = isPlanningSession && organism?.let { it.deletedAt == null &&
                     it.interventions.any { proposal -> proposal.state == ImmunityInterventionState.PROPOSED } } == true,
             )
             tasks += OrderedTask(task, root?.session?.createdAt ?: organism?.createdAt
