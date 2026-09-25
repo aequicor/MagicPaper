@@ -1818,6 +1818,8 @@ class DefaultCodingService(
         if (!resumingSessions.add(sessionId)) return
         scope.launch {
             try {
+                taskWorktrees?.inspectTaskOutcome(ui.session.projectId, sessionId)
+                taskWorktrees?.retryFailedVerification(ui.session.projectId, sessionId)
                 var pendingSession = ui.session
                 val waiting = pendingSession.queuedPrompts.firstOrNull()
                 if (waiting != null && withNote) pendingSession = acceptCodingSession(pendingSession,
@@ -1835,8 +1837,6 @@ class DefaultCodingService(
                                 attachments = attachments.map { it.asMeta() }, inputAttachments = attachments)))
                     }
                 }
-                taskWorktrees?.inspectTaskOutcome(pendingSession.projectId, sessionId)
-                taskWorktrees?.retryFailedVerification(pendingSession.projectId, sessionId)
                 val latest = finishPreviousForExplicitRun(pendingSession)
                 val queued = latest.queuedPrompts.firstOrNull()
                 val fresh = queued ?: request.copy(messageId = Id.new(), runId = Id.new(), responseId = Id.new(), responseTimelineId = Id.new(),
@@ -1846,8 +1846,13 @@ class DefaultCodingService(
                 launchCodingRun(latest, fresh, recovering = true, resumeInstruction = withNote)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                AppLog.error("coding", "run.resume.failed", failure, mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty()))
-                _state.update { it.copy(notice = "Не удалось подтвердить исход предыдущей работы. Сессия остаётся остановленной; сохранённый запрос доступен для восстановления.") }
+                if (failure is TaskWorktreeVerificationDeferred) {
+                    AppLog.info("coding", "run.resume.deferred", mapOf("sessionId" to sessionId, "reason" to "verification_unknown"))
+                    _state.update { it.copy(notice = failure.message) }
+                } else {
+                    AppLog.error("coding", "run.resume.failed", failure, mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty()))
+                    _state.update { it.copy(notice = "Не удалось подтвердить исход предыдущей работы. Сессия остаётся остановленной; сохранённый запрос доступен для восстановления.") }
+                }
             } finally { resumingSessions.remove(sessionId) }
         }
     }

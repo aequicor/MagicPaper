@@ -41,6 +41,7 @@ class TaskWorktreeMachineWireFormatTest {
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.AttachResponse",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.BindRun",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Capture",
+        "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.ConfirmVerificationRerun",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Deliver",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Handoff",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Inspect",
@@ -54,11 +55,11 @@ class TaskWorktreeMachineWireFormatTest {
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Verify",
     )
 
-    /** A branch added later must be pinned here too: the hierarchy holds exactly 31 names. */
+    /** A branch added later must be pinned here too: the hierarchy holds exactly 32 names. */
     @Test fun everyBranchIsWrittenUnderItsPinnedName() {
         val sealed = TaskWorktreeMachine.Input.serializer().descriptor.getElementDescriptor(1)
         assertEquals(pinned, (0 until sealed.elementsCount).map { sealed.getElementName(it) }.toSet())
-        assertEquals(31, pinned.size)
+        assertEquals(32, pinned.size)
     }
 
     @Test fun everyBranchClassIsWrittenUnderItsOwnPinnedName() {
@@ -83,6 +84,7 @@ class TaskWorktreeMachineWireFormatTest {
             TaskWorktreeMachine.Input.Intent.AttachResponse.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.AttachResponse",
             TaskWorktreeMachine.Input.Intent.BindRun.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.BindRun",
             TaskWorktreeMachine.Input.Intent.Capture.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Capture",
+            TaskWorktreeMachine.Input.Intent.ConfirmVerificationRerun.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.ConfirmVerificationRerun",
             TaskWorktreeMachine.Input.Intent.Deliver.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Deliver",
             TaskWorktreeMachine.Input.Intent.Handoff.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Handoff",
             TaskWorktreeMachine.Input.Intent.Inspect.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Inspect",
@@ -95,7 +97,7 @@ class TaskWorktreeMachineWireFormatTest {
             TaskWorktreeMachine.Input.Intent.RevokeHandoff.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.RevokeHandoff",
             TaskWorktreeMachine.Input.Intent.Verify.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Verify",
         )
-        assertEquals(31, owned.size)
+        assertEquals(32, owned.size)
         for ((written, name) in owned) assertEquals(name, written)
         assertEquals(pinned, owned.map { it.second }.toSet())
     }

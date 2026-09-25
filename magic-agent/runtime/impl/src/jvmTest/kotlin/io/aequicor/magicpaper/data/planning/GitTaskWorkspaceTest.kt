@@ -38,7 +38,8 @@ class GitTaskWorkspaceTest {
         val journal = InMemoryEventJournal()
         val payloads = InMemoryKeyValueStore()
         // This suite tests the Git child with a controlled parent projection port. App tests use CodingMachine.
-        fun worktreeService(repo: JsonCodingProjectRepository, workspace: TaskWorkspace, leases: PlanningWorkspace): TaskWorktreeService =
+        fun worktreeService(repo: JsonCodingProjectRepository, workspace: TaskWorkspace, leases: PlanningWorkspace,
+            questions: RuntimeQuestionnaireService? = null): TaskWorktreeService =
             TaskWorktreeService(object : TaskWorktreeSessionAccess {
                 override suspend fun session(projectId: String, sessionId: String) = repo.sessions(projectId).firstOrNull { it.id == sessionId }
                 override suspend fun publish(projection: TaskWorktreeProjection) {
@@ -47,7 +48,7 @@ class GitTaskWorkspaceTest {
                         session.copy(taskWorktree = projection.task)
                     }
                 }
-            }, workspace, leases, testTaskWorktreeOwner(workspace, journal, payloads), TestTaskWorktreeRuntime())
+            }, workspace, leases, testTaskWorktreeOwner(workspace, journal, payloads), TestTaskWorktreeRuntime(), questions)
 
         init {
             git(source, "init", "-b", "main")
@@ -899,6 +900,54 @@ class GitTaskWorkspaceTest {
         assertFailsWith<IllegalStateException> { service.complete(project, "session", "request", repair = {}) }
         assertEquals(TaskWorktreePhase.COMPLETE, service.complete(project, "session", "request", repair = {}).phase)
         assertEquals("once", source.resolve("result").readText())
+    } }
+
+    @Test fun interruptedVerificationRequiresConsentBeforeChecksRunAgain() = runTest { fixture {
+        val repo = JsonCodingProjectRepository(InMemoryKeyValueStore(), Json { encodeDefaults = true })
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        val leases = GitPlanningWorkspace(File(root, "leases"), authority)
+        val interrupted = object : TaskWorkspace by port {
+            override suspend fun verify(record: TaskWorktree, operation: TaskWorkspaceOperation) {
+                error("injected check interruption")
+            }
+        }
+        val first = worktreeService(repo, interrupted, leases)
+        val task = first.begin(project, "session", "request")
+        File(task.path).resolve("result.txt").writeText("saved")
+        first.handoff(ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE), true, emptyList())
+        assertFailsWith<IllegalStateException> { first.complete(project, "session", "request", repair = {}) }
+        assertFalse(source.resolve("result.txt").exists())
+
+        var reruns = 0
+        val resumedPort = object : TaskWorkspace by port {
+            override suspend fun verify(record: TaskWorktree, operation: TaskWorkspaceOperation) {
+                reruns++
+                port.verify(record, operation)
+            }
+        }
+        var consent = false
+        var prompts = 0
+        val questions = object : RuntimeQuestionnaireService by testQuestionnaires() {
+            override suspend fun ask(request: UserInteractionRequest): List<PlanningAnswer> {
+                prompts++
+                assertEquals(InteractionKind.RUNTIME, request.kind)
+                return listOf(PlanningAnswer("verify-rerun", selected = listOf(if (consent) "rerun" else "later")))
+            }
+        }
+        val resumed = worktreeService(repo, resumedPort, leases, questions)
+        assertFailsWith<TaskWorktreeVerificationDeferred> { resumed.inspectTaskOutcome(project.id, "session") }
+        assertEquals(0, reruns)
+        assertFalse(source.resolve("result.txt").exists())
+        consent = true
+        resumed.inspectTaskOutcome(project.id, "session")
+        assertEquals(0, reruns, "consent only retires the interrupted attempt")
+        val afterConsentRestart = worktreeService(repo, resumedPort, leases, questions)
+        assertEquals(TaskWorktreePhase.COMPLETE, afterConsentRestart.complete(project, "session", "request", repair = {}).phase)
+        assertEquals(1, reruns)
+        assertEquals(2, prompts)
+        assertEquals("saved", source.resolve("result.txt").readText())
     } }
 
     @Test fun durableTaskReopensAcrossGenerationAndRequiresHandoff() = runTest { fixture {

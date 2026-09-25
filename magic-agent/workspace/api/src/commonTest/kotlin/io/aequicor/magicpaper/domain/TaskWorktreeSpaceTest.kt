@@ -126,6 +126,7 @@ class TaskWorktreeSpaceTest {
             TaskWorktreeSpace.UNAPPLIED_CAPTURE to Fact.InspectedUnapplied("op", "task", Operation.CAPTURE),
             TaskWorktreeSpace.UNAPPLIED_INTEGRATE to Fact.InspectedUnapplied("op", "task", Operation.INTEGRATE),
             TaskWorktreeSpace.UNAPPLIED_OTHER to Fact.InspectedUnapplied("op", "task", Operation.VERIFY),
+            TaskWorktreeSpace.CONFIRM_VERIFICATION_RERUN to Intent.ConfirmVerificationRerun("task", "op", 1),
         ),
     )
 }

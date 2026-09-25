@@ -193,7 +193,7 @@ class TaskWorktreeMachineTest {
         reject(opened, Input.Intent.Refresh("next", 2, "open-next"), TaskWorktreeMachine.Reason.ALREADY_USED)
     }
 
-    @Test fun knownFailedVerificationNeedsExplicitRepairButUnknownCanNeverBeRepairedByAssumption() {
+    @Test fun knownFailedVerificationNeedsRepairAndUnknownNeedsExplicitRerunConsent() {
         val started = next(merged(), Input.Intent.Verify("task", 1, "verify"))
         val failed = next(started, Input.Fact.VerificationFailed("verify", "Check failed"))
         assertFalse(failed.unknown)
@@ -210,6 +210,15 @@ class TaskWorktreeMachineTest {
         val unknown = next(started, Input.Fact.Restored)
         reject(unknown, Input.Intent.ReturnForRepair("task", 1), TaskWorktreeMachine.Reason.UNKNOWN)
         reject(unknown, Input.Intent.RetryVerification("task", 1), TaskWorktreeMachine.Reason.UNKNOWN)
+        reject(unknown, Input.Intent.ConfirmVerificationRerun("task", "other", 1), TaskWorktreeMachine.Reason.STALE)
+        reject(unknown, Input.Intent.ConfirmVerificationRerun("task", "verify", 2), TaskWorktreeMachine.Reason.STALE)
+        val confirmed = next(unknown, Input.Intent.ConfirmVerificationRerun("task", "verify", 1))
+        assertFalse(confirmed.unknown)
+        assertEquals(null, confirmed.pending)
+        assertEquals("", confirmed.verifiedCommit)
+        reject(confirmed, Input.Intent.AcceptMerge("task", 1, "merged"), TaskWorktreeMachine.Reason.NOT_READY)
+        assertEquals(TaskWorktreeMachine.Operation.VERIFY,
+            next(confirmed, Input.Intent.Verify("task", 1, "repeat")).pending?.kind)
         val saved = next(unknown, Input.Fact.OutcomeRecovered(Input.Fact.VerificationFailed("verify", "Check failed")))
         assertEquals(failed, saved)
     }

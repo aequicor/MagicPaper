@@ -35,13 +35,14 @@ class TaskWorktreeService(
         val child = owner.projection(TaskWorktreeOwnerId(projectId, sessionId), current.taskWorktree, current.runtimeGeneration)
         return current.copy(taskWorktree = child.task)
     }
-    private suspend fun accept(projectId: String, sessionId: String, intent: TaskWorktreeMachine.Input.Intent, publish: Boolean = true, handles: TaskWorkspaceLeases = TaskWorkspaceLeases()): TaskWorktree {
+    private suspend fun accept(projectId: String, sessionId: String, intent: TaskWorktreeMachine.Input.Intent, publish: Boolean = true,
+        requireKnown: Boolean = true, handles: TaskWorkspaceLeases = TaskWorkspaceLeases()): TaskWorktree {
         val id = TaskWorktreeOwnerId(projectId, sessionId)
         try {
             val next = owner.accept(id, intent, handles)
             if (publish) sessions.publish(next)
             changes.update { it + 1 }
-            check(!next.unknown) { "Исход операции с рабочей копией неизвестен. Проверьте сохранённый результат" }
+            if (requireKnown) check(!next.unknown) { "Исход операции с рабочей копией неизвестен. Проверьте сохранённый результат" }
             return checkNotNull(next.task)
         } catch (failure: Throwable) {
             // A failed external effect still has a durable unknown projection for the parent UI.
@@ -119,12 +120,36 @@ class TaskWorktreeService(
         val task = checkNotNull(child.task)
         accept(projectId, sessionId, TaskWorktreeMachine.Input.Intent.RetryVerification(task.taskId, child.generation))
     }
-    /** Explicit recovery reads exact saved evidence before the parent can admit another native attempt. */
+    /** Explicit recovery reads saved evidence first. An interrupted check needs separate consent to run again. */
     suspend fun inspectTaskOutcome(projectId: String, sessionId: String) {
         val child = projection(projectId, sessionId)
         if (!child.unknown) return
         val task = checkNotNull(child.task) { "Рабочая копия недоступна" }
-        accept(projectId, sessionId, TaskWorktreeMachine.Input.Intent.Inspect(task.taskId))
+        accept(projectId, sessionId, TaskWorktreeMachine.Input.Intent.Inspect(task.taskId), requireKnown = false)
+        val inspected = projection(projectId, sessionId)
+        if (!inspected.unknown) return
+        val operationId = inspected.pendingOperationId
+        if (inspected.pendingOperation != TaskWorktreeMachine.Operation.VERIFY || operationId == null)
+            error("Исход операции с рабочей копией неизвестен. Проверьте сохранённый результат")
+        val questionnaire = questions ?: throw TaskWorktreeVerificationDeferred()
+        val current = parent(projectId, sessionId)
+        val question = PlanningQuestion(VERIFY_QUESTION,
+            "Приложение остановилось во время проверок рабочей копии. Их результат неизвестен. Запустить проверки заново?",
+            QuestionKind.SINGLE, listOf(
+                QuestionOption(VERIFY_AGAIN_OPTION, "Запустить заново", "Команды проверки могут выполниться повторно"),
+                QuestionOption(VERIFY_LATER_OPTION, "Оставить остановленной", "Сохранённый результат останется без подтверждения"),
+            ), allowCustomInput = false)
+        val answers = questionnaire.ask(UserInteractionRequest("verify-recovery:$sessionId:$operationId", projectId, sessionId,
+            InteractionKind.RUNTIME, listOf(question), createdAt = Id.now(),
+            runtimeGeneration = current.runtimeGeneration, runId = current.pendingRun?.runId.orEmpty()))
+        if (answers.none { it.questionId == VERIFY_QUESTION && !it.skipped && VERIFY_AGAIN_OPTION in it.selected })
+            throw TaskWorktreeVerificationDeferred()
+        val latest = parent(projectId, sessionId)
+        check(latest.runtimeGeneration == current.runtimeGeneration && latest.pendingRun?.runId == current.pendingRun?.runId) {
+            "Запуск изменился. Повторите продолжение сессии"
+        }
+        accept(projectId, sessionId, TaskWorktreeMachine.Input.Intent.ConfirmVerificationRerun(
+            task.taskId, operationId, inspected.generation))
     }
     suspend fun recordResponse(projectId: String, sessionId: String, taskId: String, response: CodingMessage): TaskWorktree {
         val generation = parent(projectId, sessionId).runtimeGeneration
@@ -329,6 +354,9 @@ class TaskWorktreeService(
         const val ALLOW_OPTION = "allow"
         const val SKIP_OPTION = "skip"
         const val AGENT_OPTION = "agent"
+        const val VERIFY_QUESTION = "verify-rerun"
+        const val VERIFY_AGAIN_OPTION = "rerun"
+        const val VERIFY_LATER_OPTION = "later"
     }
 
     private suspend fun <T> mergeTurn(path: String, action: suspend () -> T): T {
@@ -383,6 +411,9 @@ class TaskWorktreeService(
 
 /** The user's answer to a check the containment kept from starting a program. */
 enum class SpawnRefusalDecision { ALLOW, SKIP }
+
+/** The interrupted check remains unknown until an explicit continuation accepts another attempt. */
+class TaskWorktreeVerificationDeferred : IllegalStateException("Проверки не перезапущены. Сессия остаётся остановленной")
 
 /** A check as it would be typed, for TRACE and, redacted, the user's grant question: an argument with spaces is quoted so the line reads back unambiguously. */
 internal fun checkCommandLine(args: List<String>): String =

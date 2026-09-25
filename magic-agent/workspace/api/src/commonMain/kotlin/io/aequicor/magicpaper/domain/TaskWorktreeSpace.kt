@@ -35,7 +35,9 @@ import io.aequicor.magicpaper.machine.acceptance
  * facts; a proof of a *verification* is refused in every position, because a clean checkout does not
  * prove that arbitrary commands finished. An operation inspection found unapplied is forgotten only
  * for a refresh, a capture or an integration, each in its own unknown position: those resume from
- * whatever an interrupted attempt left, so the next continuation simply repeats them. `Prepare` and `PrepareReuse` differ only in the reuse fields
+ * whatever an interrupted attempt left, so the next continuation simply repeats them. An unknown
+ * verification retires its pending attempt only after explicit consent to run checks again; it never
+ * marks the merge verified. `Prepare` and `PrepareReuse` differ only in the reuse fields
  * of the record; a finished record accepts only the second. `unknown-no-operation` is a neighbour that
  * went missing with nothing in flight: it recovers by inspection, and no recovery fact applies to it.
  * Nor does it express the text of a refusal, which is what the user reads: a `Capture` refused in
@@ -120,6 +122,7 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
     val UNAPPLIED_CAPTURE = InputId("UnappliedCapture")
     val UNAPPLIED_INTEGRATE = InputId("UnappliedIntegrate")
     val UNAPPLIED_OTHER = InputId("UnappliedOther")
+    val CONFIRM_VERIFICATION_RERUN = InputId("ConfirmVerificationRerun")
 
     override val phases = listOf(
         UNINITIALIZED, EMPTY, OPENING, RUNNING,
@@ -184,6 +187,7 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
         InputSpec(UNAPPLIED_CAPTURE, Branch.FACT),
         InputSpec(UNAPPLIED_INTEGRATE, Branch.FACT),
         InputSpec(UNAPPLIED_OTHER, Branch.FACT),
+        InputSpec(CONFIRM_VERIFICATION_RERUN, Branch.INTENT),
     )
 
     override val effects = listOf(EffectId("Execute"), EffectId("Inspect"), EffectId("Reject"))
@@ -241,6 +245,7 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
     //   49  UnappliedCapture
     //   50  UnappliedIntegrate
     //   51  UnappliedOther
+    //   52  ConfirmVerificationRerun
     override val accepts = acceptance(phases, inputs, listOf(
         /* uninitialized          */ "0000000000000000001100000000000000000000000000110000",
         /* empty                  */ "1100000000000000000000000000000000000000000000110000",
@@ -263,11 +268,11 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
         /* unknown-refreshing     */ "0000000000000000110000000000000100001010000001111000",
         /* unknown-capturing      */ "0000000000000000110000000000000010001001000001110100",
         /* unknown-integrating    */ "0000000000000000110000000000000001001000100001110010",
-        /* unknown-verifying      */ "0000000000000000110000000000000000001000011001110000",
+        /* unknown-verifying      */ "00000000000000001100000000000000000010000110011100001",
         /* unknown-delivering     */ "0000000000000000110000000000000000011000000101110000",
         /* unknown-no-operation   */ "0000000000000000110000000000000000000000000001110000",
         /* persistence-unknown    */ "0000000000000000010000000000000000000000000001110000",
-    ))
+    ).mapIndexed { index, row -> if (index == phases.indexOf(UNKNOWN_VERIFYING)) row else row + "0" })
 
     private fun executing(kind: TaskWorktreeMachine.Operation) = when (kind) {
         TaskWorktreeMachine.Operation.OPEN -> OPENING
@@ -331,6 +336,7 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
         is TaskWorktreeMachine.Input.Intent.RevokeHandoff -> REVOKE_HANDOFF
         is TaskWorktreeMachine.Input.Intent.ReturnForRepair -> RETURN_FOR_REPAIR
         is TaskWorktreeMachine.Input.Intent.RetryVerification -> RETRY_VERIFICATION
+        is TaskWorktreeMachine.Input.Intent.ConfirmVerificationRerun -> CONFIRM_VERIFICATION_RERUN
         is TaskWorktreeMachine.Input.Intent.AttachResponse -> ATTACH_RESPONSE
         is TaskWorktreeMachine.Input.Intent.Refresh -> REFRESH
         // An accepted plan lets a capture or an integration go ahead without a fresh handoff.

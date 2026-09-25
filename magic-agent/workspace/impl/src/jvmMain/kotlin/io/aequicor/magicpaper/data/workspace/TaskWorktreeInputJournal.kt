@@ -47,7 +47,7 @@ internal class TaskWorktreeInputJournal(
     fun projection(): TaskWorktreeProjection {
         val revision = snapshot?.revision ?: JournalRevision(stream, 0)
         return TaskWorktreeProjection(owner, state.record, state.generation, stream, revision.seq, revision.resetEpoch,
-            state.stage == TaskWorktreeMachine.Stage.UNKNOWN, state.verificationFailed)
+            state.stage == TaskWorktreeMachine.Stage.UNKNOWN, state.verificationFailed, state.pending?.kind, state.pending?.id)
     }
 
     suspend fun dispatch(input: TaskWorktreeMachine.Input): TaskWorktreeMachine.Transition {

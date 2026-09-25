@@ -57,6 +57,8 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.RevokeHandoff") data class RevokeHandoff(val taskId: String, val generation: Long) : Intent
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.ReturnForRepair") data class ReturnForRepair(val taskId: String, val generation: Long) : Intent
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.RetryVerification") data class RetryVerification(val taskId: String, val generation: Long) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.ConfirmVerificationRerun") data class ConfirmVerificationRerun(
+                val taskId: String, val operationId: String, val generation: Long) : Intent
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.AttachResponse") data class AttachResponse(val taskId: String, val generation: Long, val response: CodingMessage) : Intent
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Refresh") data class Refresh(val taskId: String, val generation: Long, val operationId: String) : Intent
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Capture") data class Capture(val taskId: String, val generation: Long, val operationId: String,
@@ -158,6 +160,16 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
             return Transition(state.copy(unknown = true, record = state.record?.copy(error = UNKNOWN_NOTICE)))
         }
         if (input is Input.Fact.InspectedUnapplied) return unapplied(state, input)
+        if (input is Input.Intent.ConfirmVerificationRerun) {
+            val pending = state.pending ?: return reject(Reason.STALE)
+            if (input.taskId != state.record?.taskId || input.operationId != pending.id || input.generation != state.generation)
+                return reject(Reason.STALE)
+            if (!state.unknown || state.persistenceUnknown || pending.kind != Operation.VERIFY ||
+                state.record.phase != TaskWorktreePhase.MERGING || state.record.mergeCommit.isBlank()) return reject(Reason.UNKNOWN)
+            // The user accepted a fresh check attempt. The interrupted one is retired, never marked successful.
+            return Transition(state.copy(pending = null, unknown = false,
+                record = state.record.copy(error = null), completedOperations = state.completedOperations + pending.id))
+        }
         if (input is Input.Intent.NoteFailure) {
             if (input.taskId != state.record?.taskId || input.message.isBlank()) return reject(Reason.INVALID)
             return Transition(state.copy(record = state.record?.copy(error = input.message)))

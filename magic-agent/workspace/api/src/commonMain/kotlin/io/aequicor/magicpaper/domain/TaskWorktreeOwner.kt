@@ -15,6 +15,8 @@ data class TaskWorktreeProjection(
     val resetEpoch: Long,
     val unknown: Boolean,
     val verificationFailed: Boolean = false,
+    val pendingOperation: TaskWorktreeMachine.Operation? = null,
+    val pendingOperationId: String? = null,
 )
 
 /** Parent-owned projection access. Only the runtime coordinator calls this port. */
