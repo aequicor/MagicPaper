@@ -75,6 +75,21 @@ class CodingJournalStoreTest {
         assertEquals(listOf("session"), restarted.sessions("project").map { it.id })
         assertEquals(2, f.size())
     }
+    @Test fun changingEngineThroughTheJournalKeepsHistoryAfterRestart() = runTest {
+        val f = Fixture(); f.create()
+        val original = CodingSession("session", "project", "Session", 1, engine = CodingEngine.PI, piSessionId = "pi-thread")
+        val history = listOf(CodingMessage("earlier", CodingRole.USER, "Previous request", createdAt = 2))
+        f.owner.dispatch("project", CodingMachine.Intent.CreateSession(original, history))
+
+        f.owner.dispatch("project", CodingMachine.Intent.ChangeEngine(CodingMachine.ref(original), CodingEngine.CODEX))
+        val restarted = f.open().also { it.start() }
+
+        val session = restarted.sessions("project").single()
+        assertEquals(CodingEngine.CODEX, session.engine)
+        assertEquals("", session.piSessionId)
+        assertTrue(session.needsHistorySeed)
+        assertEquals(history, restarted.messages("project", "session"))
+    }
     @Test fun replacedPrefixCannotConfirmAnOtherwiseMatchingLastRecord() = runTest {
         val f = Fixture(); f.create(); f.journal.loseAck = true; f.journal.replacePrefixAfterAppend = true
         assertFails { f.add() }

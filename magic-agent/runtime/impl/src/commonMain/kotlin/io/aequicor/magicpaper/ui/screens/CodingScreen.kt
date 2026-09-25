@@ -330,14 +330,11 @@ private fun SessionArea(
     val sessionInfo = active.session
     // Переключатель источника/модели/усилия активной сессии.
     var switcherOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
-    var sessionSettingsOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
-    val canChangeEngine = sessionInfo.isConversation && sessionInfo.planId == null &&
-        sessionInfo.organismId == null && !sessionInfo.archived
-    val effective = projectPlanningTranscript(active, ui)
     Column(modifier = Modifier.fillMaxSize()) {
         val service = vm.planningChat
         val latestServiceDrafts = androidx.compose.runtime.rememberUpdatedState(ui.planning.drafts)
         val workerPlan = ui.planning.plans.firstOrNull { it.id == sessionInfo.planId } ?: active.plan
+        val effective = projectPlanningTranscript(active, ui)
         val pins = ui.requestPins
         ui.organisms[sessionInfo.organismId]?.takeIf { it.immunityId == sessionInfo.id }?.let { organism ->
             val actions = ui.immunityActions
@@ -415,8 +412,8 @@ private fun SessionArea(
                 onSkills = onSkills,
                 defaultEngine = defaultEngine,
                 onDefaultEngineChange = vm::selectDefaultCodingEngine,
-                onSessionSettings = { sessionSettingsOpen = true },
-                onEngineChange = if (effective.canChangeHistory && canChangeEngine) {
+                onEngineChange = if (effective.canChangeHistory && sessionInfo.isConversation &&
+                    sessionInfo.planId == null && sessionInfo.organismId == null && !sessionInfo.archived) {
                     { engine -> vm.changeCodingEngine(sessionInfo.id, engine) }
                 } else null,
                 quarantineRecovery = quarantineOrganism?.let { organism -> {
@@ -466,19 +463,6 @@ private fun SessionArea(
             activeProfileId = activeProfileId,
             sessionProfileId = sessionInfo.llmProfileId,
             onDismiss = { switcherOpen = false },
-        )
-    }
-    if (sessionSettingsOpen) {
-        SessionEngineSettingsDialog(
-            engine = sessionInfo.engine ?: defaultEngine,
-            canChange = canChangeEngine && effective.canChangeHistory,
-            unavailableReason = when {
-                sessionInfo.archived -> "Закрытую сессию нельзя изменить."
-                !canChangeEngine -> "Движок этой сессии задаёт её план или рабочий процесс."
-                else -> "Дождитесь завершения текущей работы, чтобы сменить движок."
-            },
-            onChange = { engine -> vm.changeCodingEngine(sessionInfo.id, engine) },
-            onDismiss = { sessionSettingsOpen = false },
         )
     }
 }
@@ -972,7 +956,6 @@ internal fun CodingChat(
     defaultEngine: CodingEngine = CodingEngine.PI,
     onDefaultEngineChange: ((CodingEngine) -> Unit)? = null,
     onEngineChange: ((CodingEngine) -> Unit)? = null,
-    onSessionSettings: (() -> Unit)? = null,
     onSearchProvider: ((SearchProvider) -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     onClarify: ((String, List<Attachment>) -> Unit)? = null,
@@ -1163,10 +1146,6 @@ internal fun CodingChat(
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth()
                 .padding(top = laneTop)
                 .onSizeChanged { systemHeaderHeight = with(density) { it.height.toDp() } }) {
-                if (onSessionSettings != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.End) {
-                    PaperButton("Параметры сессии", onSessionSettings, kind = PaperButtonKind.QUIET)
-                }
                 if (showOrchestrationStatus)
                     OrchestrationStatus(session, planningService, onOpenSession, planningState, Modifier, scrolled = false)
                 else if (interactions.isEmpty()) session.blockingReason?.let { reason ->
