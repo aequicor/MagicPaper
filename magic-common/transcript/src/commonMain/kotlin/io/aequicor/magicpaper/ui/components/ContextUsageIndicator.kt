@@ -94,7 +94,7 @@ fun ContextUsageDetails(
             }
             when {
                 usage.windows.isEmpty() && usage.stale -> "Лимиты сейчас недоступны"
-                usage.windows.isEmpty() -> "Лимиты появятся после ответа модели"
+                usage.windows.isEmpty() -> "Получаем данные о лимитах…"
                 usage.stale -> "Не удалось обновить, показаны прежние данные"
                 else -> null
             }?.let { PaperText(it, role = PaperTextRole.LABEL, color = colors.secondaryText) }

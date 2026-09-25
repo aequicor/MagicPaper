@@ -122,17 +122,18 @@ class CodingUsageUiTest {
         }
     }
 
-    @Test fun planWithoutFiguresExplainsWhenTheyAppear() {
+    @Test fun planWithoutFiguresShowsLoadingState() {
         ImageComposeScene(360, 300) {
             MagicPaperTheme { PaperPanel(Modifier.fillMaxSize()) {
-                ContextUsageDetails(null, "", compacting = false, plan = PlanUsage(ProviderType.OPENAI_SUBSCRIPTION), now = 0)
+                ContextUsageDetails(null, "", compacting = false, plan = PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION), now = 0)
             } }
         }.use { scene ->
             repeat(3) { scene.render(tick()).close() }
             val texts = scene.nodes().map { it.text() }
             assertTrue("Нет данных" in texts)
-            assertTrue("Лимиты ChatGPT" in texts)
-            assertTrue("Лимиты появятся после ответа модели" in texts)
+            assertTrue("Лимиты Claude" in texts)
+            assertTrue("Получаем данные о лимитах…" in texts)
+            scene.snapshot("plan-loading-360")
         }
     }
 }

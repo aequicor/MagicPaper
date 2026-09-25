@@ -22,6 +22,7 @@ class ClaudeCodeSubscription(private val agent: NativeAgentAdapter) : ClaudeSubs
         agent.signIn?.signIn() ?: EngineSignInResult.Failed("Вход для этого движка недоступен.")
     override suspend fun signOut(): EngineSignOutResult =
         agent.signOut?.signOut() ?: EngineSignOutResult.Failed("Выход для этого движка недоступен.")
+    override suspend fun planUsage(): PlanUsage? = completion.readPlanUsage()
 
     override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> {
         require(profile.provider == ProviderType.ANTHROPIC_SUBSCRIPTION)

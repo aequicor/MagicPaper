@@ -88,7 +88,8 @@ class UsageOwner(val scope: UsageScope, val updatesContext: Boolean = true) : Ab
 
 
 data class UsageCallResult(val tokens: TokenUsage = TokenUsage(), val cost: UsageCost? = null,
-    val contextTokens: Long? = null, val contextLimit: Long? = null, val requests: Long = 1)
+    val contextTokens: Long? = null, val contextLimit: Long? = null, val requests: Long = 1,
+    val planUsage: PlanUsage? = null)
 class UsageCall : AbstractCoroutineContextElement(Key) {
     val result = MutableStateFlow(UsageCallResult())
     companion object Key : CoroutineContext.Key<UsageCall>

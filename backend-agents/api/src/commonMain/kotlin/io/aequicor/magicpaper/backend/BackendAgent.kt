@@ -101,6 +101,8 @@ interface NativeCompletion {
     /** The subscription provider whose requests this engine answers, so the host routes by capability. */
     val provider: ProviderType
     suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit, onUsage: (UsageCallResult) -> Unit): String
+    /** A provider may expose current plan allowances without sending a model request. */
+    suspend fun readPlanUsage(): PlanUsage? = null
 }
 
 /** [signedOut] marks the one failure the engine's own sign-in resolves. */

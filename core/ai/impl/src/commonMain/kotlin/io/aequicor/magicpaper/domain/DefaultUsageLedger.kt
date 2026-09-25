@@ -18,6 +18,7 @@ class DefaultUsageLedger(
     payloads: KeyValueStore,
     json: Json,
     private val storageDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val plans: PlanUsageMonitor? = null,
 ) : UsageLedger {
     private val json = Json(json) { encodeDefaults = true }
     private val lock = Mutex()
@@ -132,6 +133,7 @@ class DefaultUsageLedger(
         finally { withContext(NonCancellable) {
             try {
                 val result = call.result.value
+                result.planUsage?.takeIf { it.provider == profile.provider }?.let { plans?.observe(it) }
                 val pricing = profile.modelCatalog.firstOrNull { it.id == profile.modelId }?.pricing
                 record(observation, initial.copy(tokens = result.tokens,
                     cost = if (initial.subscription) null else result.cost ?: pricing?.estimate(result.tokens),

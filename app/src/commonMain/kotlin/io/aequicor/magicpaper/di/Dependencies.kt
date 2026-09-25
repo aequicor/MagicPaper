@@ -98,8 +98,8 @@ internal fun buildRuntime(
         single<ChatRepository> { get<ChatJournalStore>() }
         single<ChatHistoryCommands> { get<DefaultChatService>() }
         single<RequestPinRepository> { JsonRequestPinRepository(get(), get()) }
-        single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get()), get(), get(), get()) }
-        single<PlanUsageMonitor> { DefaultPlanUsageMonitor(applicationScope, openAiSubscription) }
+        single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get()), get(), get(), get(), plans = get()) }
+        single<PlanUsageMonitor> { DefaultPlanUsageMonitor(applicationScope, openAiSubscription, claudeSubscription) }
         single { appHttpClient() } onClose { it?.close() }
         single<MediaGenerationGateway> { HttpMediaGenerationGateway(get(), get()) }
         single { DefaultMediaGenerationService(get<SettingsRepository>()::load, get<LlmProfileRepository>()::load,

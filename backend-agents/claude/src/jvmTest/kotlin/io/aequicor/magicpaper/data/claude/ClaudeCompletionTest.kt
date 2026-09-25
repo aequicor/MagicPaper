@@ -63,6 +63,18 @@ class ClaudeCompletionTest {
         }
     }
 
+    @Test fun answerPassesClaudePlanWindowsAlongsideTokenUsage() {
+        if (windows) return
+        fixture().use { f ->
+            f.script("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1790269200},"seven_day":{"utilization":0.25,"resetsAt":1790856000}}}}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Готово."}],"usage":{"input_tokens":10,"output_tokens":2}}}
+{"type":"result","subtype":"success","is_error":false,"result":"Готово."}""")
+            assertEquals("Готово.", f.complete())
+            assertEquals(12L, f.usage.single().tokens.totalTokens)
+            assertEquals(listOf("five_hour", "seven_day"), f.usage.single().planUsage?.windows?.map { it.id })
+        }
+    }
+
     @Test fun conversationArrivesAsOneUserMessageWithImages() {
         if (windows) return
         fixture().use { f ->

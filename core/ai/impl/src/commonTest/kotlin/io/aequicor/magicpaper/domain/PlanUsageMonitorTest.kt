@@ -16,6 +16,15 @@ class PlanUsageMonitorTest {
         override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> = error("Unexpected models")
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected completion")
     }
+    private class Claude(var read: suspend () -> PlanUsage?) : ClaudeSubscriptionService {
+        var reads = 0
+        override suspend fun planUsage(): PlanUsage? { reads++; return read() }
+        override suspend fun signedIn(): Boolean? = true
+        override suspend fun signIn() = error("Unexpected login")
+        override suspend fun signOut() = error("Unexpected logout")
+        override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> = error("Unexpected models")
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected completion")
+    }
 
     private val limit = OpenAiRateLimit("codex", "codex", "primary", 30, 1_000, 300)
 
@@ -44,6 +53,39 @@ class PlanUsageMonitorTest {
         monitor.refresh(ProviderType.OPENAI_SUBSCRIPTION)
         advanceUntilIdle()
         assertEquals(2, subscription.reads)
+    }
+
+    @Test fun openingClaudeUsageReadsCurrentWindowsWithoutAConversationAndThrottlesPerProvider() = runTest {
+        var clock = 0L
+        val window = PlanUsageWindow("five_hour", .25f, 300)
+        val claude = Claude { PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION, listOf(window), "max", observedAt = clock) }
+        val openAi = Subscription { OpenAiSubscriptionAccount(true, rateLimits = listOf(limit)) }
+        val monitor = DefaultPlanUsageMonitor(this, openAi, claude, now = { clock }, minInterval = 1_000)
+        monitor.refresh(ProviderType.OPENAI_SUBSCRIPTION)
+        monitor.refresh(ProviderType.ANTHROPIC_SUBSCRIPTION)
+        advanceUntilIdle()
+        assertEquals(1, openAi.reads)
+        assertEquals(1, claude.reads, "Another provider's refresh must not suppress Claude")
+        assertEquals(listOf(window), monitor.state.value[ProviderType.ANTHROPIC_SUBSCRIPTION]?.windows)
+        monitor.refresh(ProviderType.ANTHROPIC_SUBSCRIPTION)
+        advanceUntilIdle()
+        assertEquals(1, claude.reads)
+        clock = 1_000
+        monitor.refresh(ProviderType.ANTHROPIC_SUBSCRIPTION)
+        advanceUntilIdle()
+        assertEquals(2, claude.reads)
+    }
+
+    @Test fun unavailableClaudeRefreshMarksOldFiguresStale() = runTest {
+        var clock = 0L
+        val claude = Claude { PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION, listOf(PlanUsageWindow("five_hour", .2f))) }
+        val monitor = DefaultPlanUsageMonitor(this, claudeSubscription = claude, now = { clock }, minInterval = 1)
+        monitor.refresh(ProviderType.ANTHROPIC_SUBSCRIPTION); advanceUntilIdle()
+        claude.read = { null }
+        clock = 10
+        monitor.refresh(ProviderType.ANTHROPIC_SUBSCRIPTION); advanceUntilIdle()
+        assertEquals(1, monitor.state.value.getValue(ProviderType.ANTHROPIC_SUBSCRIPTION).windows.size)
+        assertTrue(monitor.state.value.getValue(ProviderType.ANTHROPIC_SUBSCRIPTION).stale)
     }
 
     @Test fun failedRefreshKeepsTheLastFiguresAsStaleAndSignOutClearsThem() = runTest {

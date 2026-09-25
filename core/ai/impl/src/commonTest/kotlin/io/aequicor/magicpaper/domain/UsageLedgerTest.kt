@@ -60,6 +60,19 @@ class UsageLedgerTest {
         assertTrue(entry.subscription); assertNull(entry.cost); assertFalse(entry.completed)
     }
 
+    @Test fun measuredSubscriptionAnswerUpdatesClaudePlanMonitor() = runTest {
+        val store = InMemoryKeyValueStore()
+        val plans = DefaultPlanUsageMonitor(this)
+        val tracker = DefaultUsageLedger(JsonUsageRepository(store, json), InMemoryEventJournal(), store, json, plans = plans)
+        tracker.start()
+        val window = PlanUsageWindow("five_hour", .12f, 300)
+        tracker.measure(LlmProfile("p", "Claude", provider = ProviderType.ANTHROPIC_SUBSCRIPTION)) {
+            currentCoroutineContext()[UsageCall]!!.result.value = UsageCallResult(TokenUsage(10, 2),
+                planUsage = PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION, listOf(window)))
+        }
+        assertEquals(listOf(window), plans.state.value[ProviderType.ANTHROPIC_SUBSCRIPTION]?.windows)
+    }
+
     @Test fun cancelledCallsRetainUsageWithoutReplacingTheForegroundContext() = runTest {
         val store = InMemoryKeyValueStore(); val journal = InMemoryEventJournal(); val tracker = ledger(store, journal)
         val before = ContextUsageSnapshot("coding:plan", "foreground", 900, 1000)

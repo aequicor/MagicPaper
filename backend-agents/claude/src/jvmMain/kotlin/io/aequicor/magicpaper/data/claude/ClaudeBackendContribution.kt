@@ -52,8 +52,10 @@ internal class ClaudeBackendAgent(
         }
     }
     private val chat = ClaudeCompletion(executable, File(root, "chat"), environment.diagnostics, environment.toolPresentation)
+    private val planUsage = ClaudePlanUsageQuery(executable, File(root, "usage"))
     override val completion: NativeCompletion = object : NativeCompletion {
         override val provider = chat.provider
+        override suspend fun readPlanUsage(): PlanUsage? = planUsage.read()
         override suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit, onUsage: (UsageCallResult) -> Unit): String =
             try { chat.complete(request, onActivity, onUsage).also { authenticationFailed = false } }
             catch (failure: NativeCompletionFailure) {

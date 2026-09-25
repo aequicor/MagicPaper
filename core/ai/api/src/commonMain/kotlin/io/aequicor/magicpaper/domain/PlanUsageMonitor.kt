@@ -4,7 +4,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Subscription allowances, latest per provider. Engines push what arrives with their responses; [refresh] asks a
- * provider that answers between requests. Nothing is persisted: the figures age within hours.
+ * provider for a fresh snapshot when it can answer between requests. Nothing is persisted: the figures age within hours.
  */
 interface PlanUsageMonitor {
     val state: StateFlow<Map<ProviderType, PlanUsage>>

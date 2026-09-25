@@ -64,6 +64,7 @@ internal class ClaudeCompletion(
         val parser = ClaudeStreamParser(presentation)
         var text = ""
         var usage: TokenUsage? = null
+        var planUsage: PlanUsage? = null
         var finished = false
         try {
             process.outputStream.use { it.write((message + "\n").toByteArray(UTF_8)) }
@@ -84,6 +85,7 @@ internal class ClaudeCompletion(
                     when (event) {
                         is CodingEvent.FinalText -> text = event.text
                         is CodingEvent.UsageObserved -> usage = usage?.let { it + event.tokens } ?: event.tokens
+                        is CodingEvent.PlanUsageObserved -> planUsage = planUsage?.merge(event.usage) ?: event.usage
                         is CodingEvent.ToolStarted -> onActivity(CodingStep(CodingStepKind.TOOL, event.title ?: event.summary.ifBlank { event.tool },
                             tool = event.tool, callId = event.callId, running = true))
                         is CodingEvent.ToolFinished -> onActivity(CodingStep(CodingStepKind.TOOL, event.title ?: event.tool,
@@ -102,7 +104,7 @@ internal class ClaudeCompletion(
         } finally {
             withContext(NonCancellable) { if (process.isAlive) stop(process) }
         }
-        usage?.let { onUsage(UsageCallResult(it)) }
+        if (usage != null || planUsage != null) onUsage(UsageCallResult(tokens = usage ?: TokenUsage(), planUsage = planUsage))
         val terminal = parser.result ?: run {
             diagnostics.error(COMPONENT, "completion_unfinished", IllegalStateException("Claude Code ended without a result"),
                 mapOf("exitCode" to process.exitValue().toString()))
