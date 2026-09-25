@@ -13,6 +13,7 @@ import io.aequicor.magicpaper.domain.tools.ToolPhase
 
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import io.aequicor.magicpaper.ui.components.PaperInlineMessageParts
+import io.aequicor.magicpaper.ui.components.PaperMessageSelectionContainer
 import io.aequicor.magicpaper.ui.components.PaperMessageExpansion
 import io.aequicor.magicpaper.ui.components.LocalPaperMessageExpansion
 import io.aequicor.magicpaper.ui.components.rememberPaperInlineMessageParts
@@ -1053,6 +1054,7 @@ internal fun CodingChat(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()
         .onGloballyPositioned { journalTopInWindow = it.boundsInWindow().top }) {
             val questionHeight = maxHeight * 0.75f
+            PaperMessageSelectionContainer {
             PaperLazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
@@ -1106,6 +1108,7 @@ internal fun CodingChat(
                         }
                     }
                 }
+            }
             }
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth()
                 .padding(top = laneTop)

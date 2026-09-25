@@ -4,12 +4,30 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -51,8 +69,14 @@ public interface PaperMarkdownSlice : ASTNode {
 
 @Composable
 public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNode>, modifier: Modifier = Modifier,
-    compact: Boolean = false, listState: LazyListState? = null, selectable: Boolean = true) {
+    compact: Boolean = false, listState: LazyListState? = null, selectable: Boolean = true,
+    onSelectAll: (() -> Unit)? = null) {
     val bodyStyle = if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body
+    var selectingAll by remember(document.source) { mutableStateOf(false) }
+    if (selectingAll) {
+        PaperMarkdownSelectedSource(document.source, modifier, bodyStyle) { selectingAll = false }
+        return
+    }
     val reading = LocalPaperResearchReading.current && !compact
     val components = remember {
         markdownComponents(
@@ -134,5 +158,33 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
             },
         )
     }
-    if (selectable) SelectionContainer { body() } else body()
+    if (selectable) SelectionContainer(modifier = Modifier.onKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.A &&
+            (event.isCtrlPressed || event.isMetaPressed)) {
+            if (onSelectAll != null) onSelectAll() else selectingAll = true
+            true
+        } else false
+    }) { body() } else body()
+}
+
+/** Compose's SelectionContainer does not implement the select-all keyboard command.
+ * A read-only text field supplies native selection and copy for the complete source,
+ * including blocks that a lazy renderer has not composed. */
+@Composable
+internal fun PaperMarkdownSelectedSource(source: String, modifier: Modifier = Modifier,
+    style: androidx.compose.ui.text.TextStyle = LocalPaperTypography.current.body, onDismiss: () -> Unit) {
+    var value by remember(source) { mutableStateOf(TextFieldValue(source, TextRange(0, source.length))) }
+    val focus = remember { FocusRequester() }
+    var hadFocus by remember { mutableStateOf(false) }
+    BasicTextField(value = value, onValueChange = { value = it.copy(text = source) }, readOnly = true,
+        textStyle = style, modifier = modifier.fillMaxWidth().focusRequester(focus)
+            .onFocusChanged { state ->
+                if (state.isFocused) hadFocus = true else if (hadFocus) onDismiss()
+            }.onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onDismiss()
+                    true
+                } else false
+            })
+    LaunchedEffect(focus) { focus.requestFocus() }
 }

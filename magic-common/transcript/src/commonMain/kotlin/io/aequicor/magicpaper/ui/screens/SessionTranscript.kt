@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 import io.aequicor.magicpaper.ui.components.PaperInlineMessageParts
+import io.aequicor.magicpaper.ui.components.PaperMessageSelectionContainer
 import io.aequicor.magicpaper.ui.components.rememberPaperInlineMessageParts
 
 
@@ -140,6 +141,7 @@ fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modi
     val controlsBottomPadding = maxOf(floatingControlsBottomPadding, footerHeight - 8.dp)
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isNotEmpty() || busy) {
+            PaperMessageSelectionContainer {
             PaperLazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
@@ -166,6 +168,7 @@ fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modi
                     }
                 }
 
+            }
             }
         }
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
