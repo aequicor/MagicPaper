@@ -440,6 +440,46 @@ class GitTaskWorkspaceTest {
         } finally { AppLog.level = level }
     } }
 
+    @Test fun verificationWaitsForNeighbourBeforeReadingGitAndCanDeliver() = runTest { fixture {
+        val refused = mutableMapOf<CheckRef, CheckResult>()
+        val checkedDone = CompletableDeferred<Unit>()
+        val waiting = CompletableDeferred<Unit>()
+        val neighbourDone = CompletableDeferred<Unit>()
+        var busyIssued = false
+        val runner = object : CommandChecks by gitChecks {
+            override suspend fun run(command: CheckCommand): CheckResult {
+                if (command.outputMode == CheckOutputMode.TEXT) {
+                    checkedDone.complete(Unit)
+                    return CheckResult("passed", 0).also { refused[command.ref] = it }
+                }
+                if (checkedDone.isCompleted && !busyIssued) {
+                    busyIssued = true
+                    refused[command.ref] = CheckResult("", null, "Проверка не запущена: ресурс занят")
+                    throw CheckResourceBusy()
+                }
+                return gitChecks.run(command)
+            }
+            override suspend fun awaitConflictingChecks(command: CheckCommand): Boolean {
+                waiting.complete(Unit)
+                neighbourDone.await()
+                return true
+            }
+            override suspend fun inspect(ref: CheckRef) = refused[ref] ?: gitChecks.inspect(ref)
+        }
+        val checked = port(runner)
+        val task = open()
+        File(task.path, "result.txt").writeText("result")
+        val record = prepare(task).copy(checks = listOf(listOf("check")))
+        val verification = async { checked.verify(record, "neighbour-verification") }
+        waiting.await()
+        assertFalse(verification.isCompleted, "Verification must wait for a live neighbour")
+        neighbourDone.complete(Unit)
+        verification.await()
+        checked.deliver(record)
+        assertEquals("result", File(source, "result.txt").readText())
+        assertTrue(busyIssued)
+    } }
+
     @Test fun checkCancellationPreservesUnknownLeaseWithoutDelivery() = runTest { fixture {
         val cancellation = CancellationException("Check cancelled")
         var cancelledRef: CheckRef? = null

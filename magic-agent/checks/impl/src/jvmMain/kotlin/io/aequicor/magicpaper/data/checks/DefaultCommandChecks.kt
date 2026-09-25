@@ -316,6 +316,24 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         } }.toSet()
     }
 
+    override suspend fun awaitConflictingChecks(command: CheckCommand): Boolean {
+        val resources = command.resources.map(::canonicalResource).toSet()
+        val primary = canonicalResource(command.resource)
+        // The refused call has already left the live registry. Snapshot only other owners' exact
+        // completions; a check ending between this snapshot and the next submission is harmless.
+        val pending = activeCommands.entries.mapNotNull { (ref, active) ->
+            if (active.resource != primary && active.resources.any(resources::contains)) completions[ref] else null
+        }
+        pending.forEach { it.await() }
+        return pending.isNotEmpty()
+    }
+
+    override suspend fun awaitActive(ref: CheckRef): Boolean {
+        val completion = completions[ref] ?: return false
+        completion.await()
+        return true
+    }
+
     /** Called after resource reservation, outside admission and entry locks. No native effects. */
     private suspend fun checkResourceConflicts(command: CheckCommand) {
         val resources = command.resources

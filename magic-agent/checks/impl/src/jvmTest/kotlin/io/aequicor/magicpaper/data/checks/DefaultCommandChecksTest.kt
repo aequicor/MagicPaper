@@ -364,8 +364,12 @@ class DefaultCommandChecksTest {
             val neighbour = CheckCommand(CheckRef(CheckScope("project", "neighbour", "request", 0), "call"), sibling.toString(), listOf("tool"))
             assertFailsWith<CheckResourceBusy> { owner.run(neighbour) }
             assertEquals(1, driver.prepares)
+            val waiting = async { owner.awaitConflictingChecks(neighbour) }
+            yield()
+            assertFalse(waiting.isCompleted, "A refused caller must wait for the live conflicting check")
             checkNotNull(driver.awaitCompletion).complete(Unit)
             assertEquals(0, running.await().exitCode)
+            waiting.await()
             // The refusal is journaled as not started, so a lease that registered the command can still be released.
             assertNotNull(owner.inspect(neighbour.ref)?.blockedReason)
         } finally { Files.deleteIfExists(sibling) }

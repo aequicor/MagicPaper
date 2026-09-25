@@ -44,18 +44,25 @@ internal class OwnedGitCommands(private val checks: CommandChecks, private val r
     }
     private suspend fun run(dir: File, arguments: List<String>, policy: CheckPolicy,
         environment: Map<String, String>, mode: CheckOutputMode, spawnGranted: Boolean = false): Pair<CheckRef, CheckResult> {
-        val ref = CheckRef(scope, "$operationId:${sequence.incrementAndGet()}")
         val affected = affectedResources + dir.canonicalPath + gitMetadataResources(dir)
-        register(ref, affected) // Before admission: release must never miss an uncertain command or destination.
         val writes = policy != CheckPolicy.GIT_READ_ONLY
-        val result = try {
-            checks.run(CheckCommand(ref, dir.canonicalPath, arguments, policy = policy,
+        while (true) {
+            val ref = CheckRef(scope, "$operationId:${sequence.incrementAndGet()}")
+            register(ref, affected) // Before admission: release must never miss an uncertain command or destination.
+            val command = CheckCommand(ref, dir.canonicalPath, arguments, policy = policy,
                 outputMode = mode, environment = environment, protectedResource = resource, affectedResources = affected,
-                spawnGranted = spawnGranted))
-        } catch (busy: CheckResourceBusy) { throw busy }
-        catch (failure: Throwable) { if (writes) changing = true; throw failure }
-        if (writes) changing = true
-        return ref to result
+                spawnGranted = spawnGranted)
+            val result = try { checks.run(command) }
+            catch (busy: CheckResourceBusy) {
+                // A resource refusal happens before process admission. The rejected ref is settled;
+                // wait for its live neighbour, then use a new ref without repeating any started effect.
+                if (readOnly) throw busy
+                if (!checks.awaitConflictingChecks(command)) throw busy
+                continue
+            } catch (failure: Throwable) { if (writes) changing = true; throw failure }
+            if (writes) changing = true
+            return ref to result
+        }
     }
     companion object {
         fun readOnly(checks: CommandChecks, path: String): OwnedGitCommands {

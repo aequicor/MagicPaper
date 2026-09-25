@@ -28,6 +28,17 @@ class GitWorkspaceAuthority(
         val affectedResources: MutableSet<String> = mutableSetOf(lease.canonicalPath),
         val operations: Mutex = Mutex())
     private val locks = mutableMapOf<String, ProjectLock>()
+    private suspend fun awaitResolved(resources: Set<String>) {
+        while (true) {
+            val pending = resources.flatMap { checks.unresolved(it) }.toSet()
+            if (pending.isEmpty()) return
+            var awaited = false
+            for (ref in pending) if (checks.awaitActive(ref)) awaited = true
+            // A missing live completion is retained as an unknown outcome. Only a running
+            // neighbour can make a lease wait; it cannot turn an uncertain check into success.
+            if (!awaited) throw CheckOutcomeUnknown()
+        }
+    }
     private fun root(project: CodingProject) = File(lockRoot, MessageDigest.getInstance("SHA-256")
         .digest(File(project.path).canonicalPath.toByteArray()).joinToString("") { "%02x".format(it) }.take(24))
 
@@ -86,7 +97,7 @@ class GitWorkspaceAuthority(
         try {
             return withContext(Dispatchers.IO) {
                 val protectedPaths = gitMetadataResources(File(project.path)) + File(project.path).canonicalPath
-                if (protectedPaths.any { checks.unresolved(it).isNotEmpty() }) throw CheckOutcomeUnknown()
+                awaitResolved(protectedPaths)
                 synchronized(locks) {
                     val path = File(project.path).canonicalPath
                     // Only a lease which never reached its caller can be cleaned up here. Delivered
@@ -166,9 +177,7 @@ class GitWorkspaceAuthority(
         for (ref in synchronized(locks) { held.commands.toList() }) {
             if (checks.inspect(ref) == null) throw CheckOutcomeUnknown()
         }
-        for (path in synchronized(locks) { held.affectedResources.toList() }) {
-            if (checks.unresolved(path).isNotEmpty()) throw CheckOutcomeUnknown()
-        }
+        awaitResolved(synchronized(locks) { held.affectedResources.toSet() })
         synchronized(locks) {
             if (locks[lease.ownerId] !== held) return@withContext
             releaseResources(held.resources, "project-lock")

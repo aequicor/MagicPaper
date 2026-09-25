@@ -122,6 +122,10 @@ data class CheckProgress(val ref: CheckRef, val output: String)
 interface CommandChecks {
     val progress: Flow<CheckProgress>
     suspend fun run(command: CheckCommand): CheckResult
+    /** Wait for live checks behind a resource refusal; false means no safe retry was established. */
+    suspend fun awaitConflictingChecks(command: CheckCommand): Boolean
+    /** True only when this exact unfinished ref is still running and has reached its call boundary. */
+    suspend fun awaitActive(ref: CheckRef): Boolean
     suspend fun inspect(ref: CheckRef): CheckResult?
     /** Read-only saved-state query. Never stops a process, starts a probe or grants execution. */
     suspend fun unresolved(resource: String): Set<CheckRef> = error("Workspace process inspection is unavailable")

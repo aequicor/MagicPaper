@@ -8,6 +8,31 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class GitWorkspaceProcessOwnershipTest {
+    @Test fun leaseWaitsForActiveNeighbour() = runTest {
+        val project = project()
+        val neighbour = CheckRef(CheckScope("other", "session", "request", 0), "check")
+        val finished = CompletableDeferred<Unit>()
+        var active = true
+        val checks = object : CommandChecks by testGitChecks() {
+            override suspend fun unresolved(resource: String): Set<CheckRef> =
+                if (resource == project.path && active) setOf(neighbour) else emptySet()
+            override suspend fun awaitActive(ref: CheckRef): Boolean {
+                assertEquals(neighbour, ref)
+                if (!active) return false
+                finished.await()
+                active = false
+                return true
+            }
+        }
+        val port = testGitPlanningWorkspace(Files.createTempDirectory("git-neighbour-data").toFile(), checks)
+        val pending = async { port.acquire(project, "request") }
+        yield()
+        assertFalse(pending.isCompleted)
+        finished.complete(Unit)
+        val lease = assertNotNull(pending.await())
+        port.release(lease)
+    }
+
     @Test fun unknownCommandKeepsExactLeaseAndReopenCannotGrantAnotherWriter() = runTest {
         val project = project()
         val checks = ControlledChecks()
