@@ -12,6 +12,68 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class SessionHistoryDeletionTest {
+    @Test fun deletingOldImmunityKeepsTheOrdinaryRoot() = runTest {
+        val f = fixture()
+        val organismId = f.root.organismId!!
+        val immunityId = f.store.get(organismId).immunityId!!
+        f.service.project(f.store.changeRootMode(organismId, f.root.id, CodingInteractionMode.CODE))
+
+        f.service.deleteHistory(f.project.id, immunityId)
+
+        assertNull(f.store.get(organismId).immunityId)
+        assertTrue(f.projects.sessions(f.project.id).any { it.id == f.root.id })
+        val planning = f.store.changeRootMode(organismId, f.root.id, CodingInteractionMode.PLANNING)
+        val replacementId = assertNotNull(planning.immunityId)
+        assertTrue(replacementId != immunityId)
+        f.service.project(planning)
+        assertTrue(f.projects.sessions(f.project.id).any { it.id == replacementId })
+        assertTrue(f.projects.sessions(f.project.id).none { it.id == immunityId })
+    }
+
+    @Test fun recoveryDeletesPreviouslyCreatedImmunityOfAnOrdinarySession() = runTest {
+        val f = fixture()
+        val organismId = f.root.organismId!!
+        val immunityId = f.store.get(organismId).immunityId!!
+        val immunity = f.projects.sessions(f.project.id).single { it.id == immunityId }
+        f.projects.dispatch(f.project.id, CodingMachine.Fact.HistoryPublished(CodingMachine.ref(immunity), listOf(
+            CodingMessage("saved-immune-history", CodingRole.AGENT, "Old diagnosis", createdAt = 2))))
+        f.service.project(f.store.changeRootMode(organismId, f.root.id, CodingInteractionMode.CODE))
+
+        val resumed = restarted(f)
+        f.ports.stopSubtree = { ids -> ids.forEach { id ->
+            val node = resumed.store.get(organismId).sessions.getValue(id)
+            resumed.store.observe(organismId, id, node.generation, SessionObservedState.STOPPED)
+        } }
+        try { resumed.recover() } finally { resumed.shutdown() }
+
+        val saved = resumed.store.get(organismId)
+        assertNull(saved.immunityId)
+        assertTrue(immunityId in saved.historyDeletedIds)
+        assertTrue(f.projects.sessions(f.project.id).none { it.id == immunityId })
+        assertTrue(f.projects.messages(f.project.id, immunityId).isEmpty())
+        assertTrue(f.projects.sessions(f.project.id).any { it.id == f.root.id })
+        val replay = restarted(f)
+        try { replay.recover() } finally { replay.shutdown() }
+        assertNull(replay.store.get(organismId).immunityId)
+        assertTrue(f.projects.sessions(f.project.id).none { it.id == immunityId })
+    }
+
+    @Test fun failedStopKeepsOldImmunityHistoryForARecoveryAttempt() = runTest {
+        val f = fixture()
+        val organismId = f.root.organismId!!
+        val immunityId = f.store.get(organismId).immunityId!!
+        f.service.project(f.store.changeRootMode(organismId, f.root.id, CodingInteractionMode.CODE))
+        val resumed = restarted(f)
+        f.ports.stopSubtree = { error("stop outcome not confirmed") }
+
+        try { resumed.recover() } finally { resumed.shutdown() }
+
+        val saved = resumed.store.get(organismId)
+        assertEquals(immunityId, saved.immunityId)
+        assertTrue(immunityId !in saved.historyDeletedIds)
+        assertTrue(f.projects.sessions(f.project.id).any { it.id == immunityId })
+    }
+
     @Test fun deletionProjectsDurableTombstonesForEveryDescendantAndImmunity() = runTest {
         val f = fixture(); f.create("child")
         val expected = f.store.get(f.root.organismId!!).sessions.keys

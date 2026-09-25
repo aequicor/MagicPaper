@@ -95,7 +95,8 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    `BeginRun` that moves a generation on records no previous generation, because the run continues the session's
  *    conversation; only a restart names the generation it replaced, and the coding projection ends that generation's run
  *    and conversation by it.
- *    `DeleteHistoryByUser` is the whole organism, not one session; `RequestUserStop` archives or not, `SetArchiveVisibility`
+ *    `DeleteHistoryByUser` can tombstone the whole organism or one subtree; deleting its independent immunity clears the active
+ *    immunity identity while retaining audit evidence; entering planning again allocates a fresh ID. `RequestUserStop` archives or not, `SetArchiveVisibility`
  *    hides or shows, `CommandReviewResult` accepts or rejects, and a retry admission (`AdmitPlanWorker` with an
  *    authorization) is not the fresh one the representative is;
  *  - what a name covers beyond its row. `AuthorizePlanRetry` is accepted everywhere: it answers null for a session that is

@@ -451,7 +451,26 @@ class SessionOrganismService(
             if (saved.deletedAt != null) { project(saved); return@forEach }
             // A previously removed project/root is not an invitation to recreate it.
             if (sessions.none { it.projectId == saved.projectId && it.id == saved.zygoteId }) return@forEach
-            val restored = store.recover(id)
+            var restored = store.recover(id)
+            val obsoleteImmunityId = restored.immunityId?.takeIf {
+                restored.sessions[restored.zygoteId]?.mode != CodingInteractionMode.PLANNING &&
+                    sessions.none { session -> session.projectId == restored.projectId &&
+                        session.id == restored.zygoteId && session.planningMode }
+            }
+            if (obsoleteImmunityId != null) {
+                try {
+                    // Reuse the durable stop and history tombstone path. A crash after the
+                    // tombstone is replayed by project(), without repeating a native effect.
+                    deleteHistory(restored.projectId, obsoleteImmunityId)
+                    restored = store.get(id)
+                    AppLog.info("organism", "obsolete_immunity.deleted", mapOf("organismId" to id,
+                        "sessionId" to obsoleteImmunityId))
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    reportFailure(id, "delete_obsolete_immunity", failure)
+                    restored = store.get(id)
+                }
+            }
             project(restored)
             restored.integrations.values.filter { it.phase == SessionIntegrationPhase.UNKNOWN }.map { it.request.actorSessionId }.distinct().forEach { owner ->
                 // Failure remains UNKNOWN. Cleanup never authorizes a repeated Git effect.

@@ -590,8 +590,13 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
             if (node.mode == mode) return@run old
             val changed = node.copy(mode = mode, generation = node.generation + 1, previousGeneration = node.generation,
                 version = node.version + 1, observed = SessionObservedState.PENDING, desired = SessionDesiredState.RUN)
-            val newImmunityId = "$id-immunity".takeIf { mode == CodingInteractionMode.PLANNING && old.immunityId == null }
-            require(newImmunityId == null || newImmunityId !in old.sessions) { "Идентификатор иммунитета занят" }
+            val newImmunityId = if (mode == CodingInteractionMode.PLANNING && old.immunityId == null) {
+                val base = "$id-immunity"
+                var candidate = base
+                var suffix = 1
+                while (candidate in old.sessions) candidate = "$base-${suffix++}"
+                candidate
+            } else null
             val newImmunity = newImmunityId?.let { immunityId -> SessionNode(immunityId, SessionKind.IMMUNITY, "Иммунитет",
                 remainingTokens = if (old.limits.tokens == null) 0 else old.limits.recoveryTokens,
                 rules = changed.rules, lastObservedAt = clock()) }
@@ -1057,11 +1062,13 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
             val old = read(id)
             val whole = target == null || target == old.zygoteId
             val affected = if (whole) old.sessions.keys else old.subtree(target!!)
-            if (old.historyDeletedIds.containsAll(affected) && (!whole || old.deletedAt != null)) return@run old
+            if (old.historyDeletedIds.containsAll(affected) && (!whole || old.deletedAt != null) &&
+                (whole || target != old.immunityId)) return@run old
             require(affected.all { old.sessions.getValue(it).let { node -> node.settled || node.neverStartedImmunity() } }) { "Сначала подтвердите завершение всех удаляемых сессий" }
             require(old.auxiliaryRuns.values.none { it.ownerSessionId in affected && !it.settled }) { "Сначала подтвердите остановку вспомогательных запусков" }
             val operation = "delete-history-${target ?: old.zygoteId}-${old.version + 1}"
             commit(old.copy(version = old.version + 1,
+                immunityId = old.immunityId.takeUnless { !whole && target == it },
                 historyDeletedIds = old.historyDeletedIds + affected, deletedAt = if (whole) clock() else old.deletedAt,
                 stoppedByUser = old.stoppedByUser || whole,
                 sessions = old.sessions.mapValues { (sessionId, node) -> if (sessionId !in affected) node else node.copy(
