@@ -22,7 +22,7 @@ internal class BrowserToolSession(
     journal: EventJournal,
     private val owner: BrowserMachine.Owner,
     private val launch: (Playwright) -> Browser = { it.chromium().launch() },
-    private val createPlaywright: () -> Playwright = { Playwright.create() },
+    private val createPlaywright: () -> Playwright = ::createManagedPlaywright,
     private val availability: BrowserAvailability = BrowserAvailability(),
 ) : BrowserSession {
     private val dispatcher = Executors.newSingleThreadExecutor { task ->

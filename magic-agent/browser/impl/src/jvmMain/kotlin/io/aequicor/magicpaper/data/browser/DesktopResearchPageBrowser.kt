@@ -16,7 +16,7 @@ class DesktopResearchPageBrowser internal constructor(
     private val create: () -> Playwright,
     private val launch: (Playwright) -> Browser,
 ) : ResearchPageBrowser {
-    constructor() : this({ Playwright.create() }, { it.chromium().launch(BrowserType.LaunchOptions().setHeadless(false)) })
+    constructor() : this(::createManagedPlaywright, { it.chromium().launch(BrowserType.LaunchOptions().setHeadless(false)) })
 
     override suspend fun open(url: String): ResearchBrowserPage {
         require(researchUrl(url) != null)

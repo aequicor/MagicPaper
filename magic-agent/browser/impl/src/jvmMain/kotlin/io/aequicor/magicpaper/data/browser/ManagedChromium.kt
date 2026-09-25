@@ -1,10 +1,15 @@
 package io.aequicor.magicpaper.data.browser
 
 import com.microsoft.playwright.PlaywrightException
+import com.microsoft.playwright.Playwright
 import com.microsoft.playwright.impl.driver.Driver
 import io.aequicor.magicpaper.logging.AppLog
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+
+/** Driver startup must not download Firefox or WebKit before Chromium can be opened. */
+internal fun createManagedPlaywright(): Playwright = Playwright.create(
+    Playwright.CreateOptions().setEnv(mapOf("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" to "1")))
 
 /** Playwright ships its driver with the Java dependency, but keeps Chromium in a separate cache.
  * Install the browser matching this exact Playwright version only when launch proves it is missing. */

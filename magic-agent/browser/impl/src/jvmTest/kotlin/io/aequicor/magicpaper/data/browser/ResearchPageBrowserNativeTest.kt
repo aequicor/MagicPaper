@@ -11,6 +11,23 @@ import kotlin.test.*
 
 /** Local synthetic challenge only. No accounts, external sites or automated CAPTCHA solving. */
 class ResearchPageBrowserNativeTest {
+    @Test fun defaultBrowserOpensLocalPageWithoutDownloadingOtherBrowsers() = runBlocking {
+        assumeTrue(java.lang.Boolean.getBoolean("magicpaper.browser.native"))
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            val bytes = "<main>Local research page</main>".toByteArray()
+            exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        server.start()
+        var page: io.aequicor.magicpaper.domain.ResearchBrowserPage? = null
+        try {
+            page = DesktopResearchPageBrowser().open("http://127.0.0.1:${server.address.port}/")
+            assertContains(page.read().text, "Local research page")
+        } finally { page?.close(); server.stop(0) }
+    }
+
     @Test fun visibleBrowserReadsRenderedArticleAfterUserAssistanceAndRejectsOtherPages() = runBlocking {
         assumeTrue(java.lang.Boolean.getBoolean("magicpaper.browser.native"))
         val verified = AtomicBoolean()
