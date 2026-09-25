@@ -118,6 +118,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     val UNARCHIVE = InputId("Unarchive")
     val SET_SESSION_MODEL = InputId("SetSessionModel")
     val SET_SESSION_CODING_MODEL = InputId("SetSessionCodingModel")
+    val CHANGE_ENGINE = InputId("ChangeEngine")
     val SET_SEARCH_PROVIDER = InputId("SetSearchProvider")
     val CHANGE_MODE = InputId("ChangeMode")
     val SET_MEDIA_TOOL = InputId("SetMediaTool")
@@ -183,6 +184,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         InputSpec(UNARCHIVE, Branch.INTENT),
         InputSpec(SET_SESSION_MODEL, Branch.INTENT),
         InputSpec(SET_SESSION_CODING_MODEL, Branch.INTENT),
+        InputSpec(CHANGE_ENGINE, Branch.INTENT),
         InputSpec(SET_SEARCH_PROVIDER, Branch.INTENT),
         InputSpec(CHANGE_MODE, Branch.INTENT),
         InputSpec(SET_MEDIA_TOOL, Branch.INTENT),
@@ -253,8 +255,9 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     // By input rather than by position: see the KDoc. `Restored` is refused only by unconfirmed
     // persistence, `LegacyImported` and `CreateProject` only before the project exists, and nothing
     // but `Restored` and `PersistenceUnknown` gets past a deleted project.
-    // `Enqueue` is accepted beside a run and refused only by an archived session. `ChangeMode` and
-    // `SetWorktreeEnabled` refuse a queue and a run, and the first also an archived session.
+    // `Enqueue` is accepted beside a run and refused only by an archived session. `ChangeMode`,
+    // `ChangeEngine` and `SetWorktreeEnabled` refuse a queue and a run. Engine changes also refuse
+    // archived and workspace-unknown sessions so a new native thread cannot hide unsettled work.
     // `EditRequest` and `ReplaceHistory` are accepted only where the history is empty, which is what
     // the representatives send as `expected`. `Abandon` and `AbandonNotDispatched` are accepted from
     // `INTERRUPTED` and `UNKNOWN`, and `DeferRecovery` from those two and from an unfinished history;
@@ -278,6 +281,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         UNARCHIVE to SESSION,
         SET_SESSION_MODEL to SESSION,
         SET_SESSION_CODING_MODEL to SESSION,
+        CHANGE_ENGINE to setOf(IDLE, UNFINISHED_HISTORY, ANSWERED),
         SET_SEARCH_PROVIDER to SESSION,
         CHANGE_MODE to setOf(IDLE, UNFINISHED_HISTORY, ANSWERED, WORKSPACE_UNKNOWN),
         SET_MEDIA_TOOL to SESSION,
@@ -385,6 +389,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         is CodingMachine.Intent.ArchiveSession -> if (input.archived) ARCHIVE else UNARCHIVE
         is CodingMachine.Intent.SetSessionModel -> SET_SESSION_MODEL
         is CodingMachine.Intent.SetSessionCodingModel -> SET_SESSION_CODING_MODEL
+        is CodingMachine.Intent.ChangeEngine -> CHANGE_ENGINE
         is CodingMachine.Intent.SetSearchProvider -> SET_SEARCH_PROVIDER
         is CodingMachine.Intent.ChangeMode -> CHANGE_MODE
         is CodingMachine.Intent.SetMediaTool -> SET_MEDIA_TOOL

@@ -29,6 +29,8 @@ interface CodingService {
     fun cancelCodingSessionCreation()
     fun refreshCodingEngines()
     fun selectDefaultCodingEngine(engine: CodingEngine)
+    /** Switch an idle conversation to a fresh native thread, retaining its saved dialogue. */
+    fun changeCodingEngine(sessionId: String, engine: CodingEngine)
     fun selectCodingModel(sessionId: String, selection: ModelSelection, forProject: Boolean = false)
     /**
      * Выбор из каталога движка сессии. Модель и уровень сверяются со снимком каталога: пропавшую

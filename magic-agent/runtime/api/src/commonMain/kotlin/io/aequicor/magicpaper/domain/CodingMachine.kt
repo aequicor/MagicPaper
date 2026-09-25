@@ -62,6 +62,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         /** Выбор из каталога движка. Прежний [SetSessionModel] остаётся для сессий без нативного выбора. */
         @Serializable @SerialName("SetSessionCodingModel") data class SetSessionCodingModel(val session: SessionRef,
             val selection: CodingModelSelection?) : Intent
+        @Serializable @SerialName("ChangeEngine") data class ChangeEngine(val session: SessionRef, val engine: CodingEngine) : Intent
         @Serializable @SerialName("SetSearchProvider") data class SetSearchProvider(val session: SessionRef, val provider: SearchProvider) : Intent
         @Serializable @SerialName("ChangeMode") data class ChangeMode(val session: SessionRef, val mode: CodingInteractionMode) : Intent
         @Serializable @SerialName("SetMediaTool") data class SetMediaTool(val session: SessionRef, val kind: MediaKind, val enabled: Boolean) : Intent
@@ -190,6 +191,21 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             is Intent.SetSessionCodingModel -> change(state, input.session) {
                 require(input.selection == null || it.engine == null || it.engine == input.selection.engine) { "Модель принадлежит другому движку" }
                 it.copy(codingModel = input.selection)
+            }
+            is Intent.ChangeEngine -> change(state, input.session) { session ->
+                require(session.isConversation && session.planId == null && session.organismId == null && !session.archived) {
+                    "Движок этой сессии изменить нельзя"
+                }
+                require(state.runs[session.id] == null && session.pendingRun == null && session.queuedPrompts.isEmpty() &&
+                    session.taskWorktree?.phase.let { it == null || it == TaskWorktreePhase.COMPLETE } &&
+                    "workspace:${session.id}" !in state.unknownChildren &&
+                    session.observedState !in setOf(SessionObservedState.RUNNING, SessionObservedState.STOPPING, SessionObservedState.UNKNOWN) &&
+                    session.desiredState != SessionDesiredState.QUARANTINE) { "Сначала завершите текущую работу" }
+                if (session.engine == input.engine) session else session.copy(
+                    engine = input.engine, piSessionId = "", needsHistorySeed = true,
+                    codingModel = state.project?.codingModel?.takeIf { it.engine == input.engine },
+                    modelSelection = null, llmProfileId = null,
+                )
             }
             is Intent.SetSearchProvider -> change(state, input.session) { it.copy(searchProvider = input.provider) }
             is Intent.ChangeMode -> change(state, input.session) { it.changeInteractionMode(input.mode,

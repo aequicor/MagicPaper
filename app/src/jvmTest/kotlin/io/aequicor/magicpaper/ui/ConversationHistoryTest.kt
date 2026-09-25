@@ -40,6 +40,54 @@ class ConversationHistoryTest {
         }
     }
 
+    @Test fun switchingEngineSurvivesRestartAndSeedsSavedDialogueWithoutReplayingIt() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture(); val repo = JsonCodingProjectRepository(f.kv, f.json)
+        repo.save(project); repo.saveSession(session); repo.saveMessages("p", "s", history)
+        val runtime = Runtime()
+        var service: DefaultCodingService? = null
+        try {
+            service = f.prepareCoding(runtime, repo); runCurrent()
+            service.changeCodingEngine("s", CodingEngine.PI); runCurrent()
+            val switched = repo.sessions("p").single()
+            assertEquals(CodingEngine.PI, switched.engine)
+            assertEquals("", switched.piSessionId)
+            assertTrue(switched.needsHistorySeed)
+            assertEquals(history, repo.messages("p", "s"))
+            assertTrue(runtime.coding.isEmpty())
+            service.close()
+
+            service = f.prepareCoding(runtime, JsonCodingProjectRepository(f.kv, f.json)); runCurrent()
+            service.sendCodingPromptTo("s", "next-question"); advanceUntilIdle()
+            val (sent, prompt) = runtime.coding.single()
+            assertEquals(CodingEngine.PI, sent.engine)
+            assertEquals("", sent.piSessionId)
+            assertContains(prompt, "keep-first")
+            assertContains(prompt, "old-result")
+            assertContains(prompt, "next-question")
+            assertEquals(1, repo.messages("p", "s").count { it.text == "keep-first" })
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun newSessionCanChangeEngineBeforeItsFirstRequest() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture(); val repo = JsonCodingProjectRepository(f.kv, f.json)
+        val fresh = session.copy(piSessionId = "", engine = CodingEngine.PI)
+        repo.save(project); repo.saveSession(fresh)
+        val runtime = Runtime()
+        val service = f.prepareCoding(runtime, repo)
+        try {
+            runCurrent()
+            val historyBefore = repo.messages("p", "s")
+            service.changeCodingEngine("s", CodingEngine.CODEX); runCurrent()
+            assertEquals(CodingEngine.CODEX, repo.sessions("p").single().engine)
+            assertEquals(historyBefore, repo.messages("p", "s"))
+            assertTrue(runtime.coding.isEmpty())
+            service.sendCodingPromptTo("s", "first task"); advanceUntilIdle()
+            assertEquals(CodingEngine.CODEX, runtime.coding.single().first.engine)
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun deletingEitherRoleSurvivesRestartAndSeedsOnlyRemainingCodingContext() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()

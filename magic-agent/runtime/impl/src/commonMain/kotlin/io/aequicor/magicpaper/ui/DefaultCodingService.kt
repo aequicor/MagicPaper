@@ -1634,6 +1634,20 @@ class DefaultCodingService(
         }
     }
 
+    override fun changeCodingEngine(sessionId: String, engine: CodingEngine) {
+        if (closing || sessionId in changingHistory) return
+        scope.launch {
+            changeHistory(sessionId, "engine") { ui, _ ->
+                val before = ui.session
+                if (before.engine == engine) return@changeHistory
+                val saved = acceptCodingSession(before, CodingMachine.Intent.ChangeEngine(CodingMachine.ref(before), engine))
+                rememberLastUsedSession(saved)
+                AppLog.info("coding", "session.engine.changed", mapOf(
+                    "sessionId" to sessionId, "from" to (before.engine?.name ?: "unknown"), "to" to engine.name))
+            }
+        }
+    }
+
     override fun toggleWorktree(sessionId: String) {
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         if (ui.worktreeLocked) return

@@ -41,6 +41,35 @@ class CodingMachineTest {
         assertEquals(own, chosen.sessions.getValue(session.id).codingModel)
     }
 
+    @Test fun engineChangeKeepsDialogueAndStartsAFreshNativeThread() {
+        val old = session.copy(piSessionId = "pi-thread", codingModel = CodingModelSelection(CodingEngine.PI, "pi", "model"))
+        val state = apply(apply(CodingMachine.initial(), CodingMachine.Intent.CreateProject(project)),
+            CodingMachine.Intent.CreateSession(old, listOf(CodingMessage("earlier", CodingRole.USER, "Remember this", createdAt = 2))))
+        val changed = apply(state, CodingMachine.Intent.ChangeEngine(CodingMachine.ref(old), CodingEngine.CODEX))
+        val saved = changed.sessions.getValue(old.id)
+        assertEquals(CodingEngine.CODEX, saved.engine)
+        assertEquals("", saved.piSessionId)
+        assertTrue(saved.needsHistorySeed)
+        assertNull(saved.codingModel)
+        assertEquals(state.histories, changed.histories)
+        assertEquals(changed, CodingMachine.reduce(changed, CodingMachine.Intent.ChangeEngine(CodingMachine.ref(old), CodingEngine.CODEX)).state)
+    }
+
+    @Test fun engineChangeRejectsQueuedAndRunningWork() {
+        val queued = apply(ready(), CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request()))
+        rejected(queued, CodingMachine.Intent.ChangeEngine(CodingMachine.ref(session), CodingEngine.CODEX))
+        rejected(running(), CodingMachine.Intent.ChangeEngine(CodingMachine.ref(session), CodingEngine.CODEX))
+    }
+
+    @Test fun engineChangeUsesOnlyTheTargetEnginesProjectModel() {
+        val codex = CodingModelSelection(CodingEngine.CODEX, "openai", "gpt-6-astra")
+        val state = apply(ready(), CodingMachine.Intent.SetProjectCodingModel(codex))
+        val changed = apply(state, CodingMachine.Intent.ChangeEngine(CodingMachine.ref(session), CodingEngine.CODEX))
+        assertEquals(codex, changed.sessions.getValue(session.id).codingModel)
+        val returned = apply(changed, CodingMachine.Intent.ChangeEngine(CodingMachine.ref(session), CodingEngine.PI))
+        assertNull(returned.sessions.getValue(session.id).codingModel)
+    }
+
     @Test fun projectKeepsANativeDefaultForNewSessions() {
         val native = CodingModelSelection(CodingEngine.CODEX, "openai", "gpt-6-astra", "max")
         val state = apply(ready(), CodingMachine.Intent.SetProjectCodingModel(native))

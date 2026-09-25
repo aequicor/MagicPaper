@@ -31,6 +31,42 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingComposerRenderTest {
+    @Test fun engineMenuChangesTheSelectedEngineAtNarrowWidth() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            var selected: CodingEngine? = null
+            ImageComposeScene(390, 700) { MagicPaperTheme {
+                CodingComposer(enabled = true, busy = false, engine = CodingEngine.PI,
+                    onEngineChange = { selected = it }, onSend = { _, _ -> }, onAbort = {}, onPickAttachments = { _, _ -> })
+            } }.use { scene ->
+                var frame = 0L
+                fun render() { repeat(18) { frame += 16_000_000L; scene.render(frame).close(); runCurrent() } }
+                fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                fun click(label: String) {
+                    val action = nodes().first { node ->
+                        node.config.contains(SemanticsActions.OnClick) && walk(node).any { child ->
+                            child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true
+                        }
+                    }
+                    assertTrue(action.config[SemanticsActions.OnClick].action?.invoke() == true)
+                    render()
+                }
+                render()
+                nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Показать параметры") }
+                    .config[SemanticsActions.OnClick].action!!.invoke()
+                render()
+                click("Движок")
+                val output = File("build/reports/session-input").apply { mkdirs() }
+                File(output, "engine-options-390.png").writeBytes(scene.render(frame + 16_000_000L).use {
+                    it.encodeToData()!!.use { data -> data.bytes }
+                })
+                click("Codex")
+                assertEquals(CodingEngine.CODEX, selected)
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
     @Test fun shiftEnterAddsANewLineAtTheCursorWhileOtherEnterVariantsSend() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))

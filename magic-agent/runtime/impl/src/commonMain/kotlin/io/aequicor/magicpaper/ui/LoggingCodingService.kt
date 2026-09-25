@@ -62,6 +62,10 @@ internal class LoggingCodingService(private val delegate: CodingService) : Codin
     override fun selectDefaultCodingEngine(engine: CodingEngine) {
         logAction("selectDefaultCodingEngine", "backend" to engine.name); delegate.selectDefaultCodingEngine(engine)
     }
+    override fun changeCodingEngine(sessionId: String, engine: CodingEngine) {
+        logAction("changeCodingEngine", "sessionId" to sessionId, "backend" to engine.name)
+        delegate.changeCodingEngine(sessionId, engine)
+    }
     override fun selectCodingModel(sessionId: String, selection: ModelSelection, forProject: Boolean) {
         logAction("selectCodingModel", "sessionId" to sessionId, "profileId" to selection.profileId, "scope" to if (forProject) "project" else "session")
         delegate.selectCodingModel(sessionId, selection, forProject)

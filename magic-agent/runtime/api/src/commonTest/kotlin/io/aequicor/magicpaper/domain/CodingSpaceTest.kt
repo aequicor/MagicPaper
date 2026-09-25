@@ -233,6 +233,7 @@ class CodingSpaceTest {
             CodingSpace.UNARCHIVE to Intent.ArchiveSession(sessionRef, archived = false),
             CodingSpace.SET_SESSION_MODEL to Intent.SetSessionModel(sessionRef, null),
             CodingSpace.SET_SESSION_CODING_MODEL to Intent.SetSessionCodingModel(sessionRef, codingModel),
+            CodingSpace.CHANGE_ENGINE to Intent.ChangeEngine(sessionRef, CodingEngine.CODEX),
             CodingSpace.SET_SEARCH_PROVIDER to Intent.SetSearchProvider(sessionRef, SearchProvider.WIKIPEDIA),
             CodingSpace.CHANGE_MODE to Intent.ChangeMode(sessionRef, CodingInteractionMode.RESEARCH),
             CodingSpace.SET_MEDIA_TOOL to Intent.SetMediaTool(sessionRef, MediaKind.IMAGE, enabled = false),

@@ -72,7 +72,7 @@ data class CodingSession(
     val orchestratorNumber: Int? = null,
     val continuationOfNumber: Int? = null,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
-    /** Immutable after creation; null is only a legacy migration marker. */
+    /** Changed only by the coding machine while idle; null is only a legacy migration marker. */
     val engine: CodingEngine? = null,
     /** Durable request, retained until completion; STOP is an explicit user action. */
     val pendingRun: CodingRunCheckpoint? = null,

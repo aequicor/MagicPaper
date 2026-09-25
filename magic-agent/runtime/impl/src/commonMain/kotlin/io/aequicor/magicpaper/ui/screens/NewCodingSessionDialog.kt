@@ -17,7 +17,7 @@ fun NewCodingSessionDialog(engine: CodingEngine, onEngineChange: (CodingEngine) 
     PaperDialog("Новая сессия", onDismiss, confirmLabel = "Создать сессию", onConfirm = onCreate,
         confirmEnabled = loaded && !busy, dismissLabel = "Отмена", onDismissAction = onCancel, dismissEnabled = !busy) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            PaperText("Выберите движок для этой сессии. После создания его изменить нельзя; модель можно менять.")
+            PaperText("Выберите движок для этой сессии. Позже его можно сменить в меню сессии; история сохранится.")
             NativeEngineChoices(backendCatalog.descriptors, engine, enabled = loaded && !busy, onSelect = onEngineChange)
             backendCatalog.descriptors.firstOrNull { it.engine == engine }?.let { PaperText(it.summary, role = PaperTextRole.LABEL) }
             if (!loaded && error == null) PaperText("Загрузка…", role = PaperTextRole.LABEL)

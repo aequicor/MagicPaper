@@ -165,6 +165,7 @@ import io.aequicor.magicpaper.ui.components.ForkSessionAction
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.isConversation
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.PlanningChatService
@@ -409,6 +410,10 @@ private fun SessionArea(
                 onSkills = onSkills,
                 defaultEngine = defaultEngine,
                 onDefaultEngineChange = vm::selectDefaultCodingEngine,
+                onEngineChange = if (effective.canChangeHistory && sessionInfo.isConversation &&
+                    sessionInfo.planId == null && sessionInfo.organismId == null && !sessionInfo.archived) {
+                    { engine -> vm.changeCodingEngine(sessionInfo.id, engine) }
+                } else null,
                 quarantineRecovery = quarantineOrganism?.let { organism -> {
                     io.aequicor.magicpaper.ui.components.SessionQuarantineRecoveryTrigger(organism, sessionInfo.id,
                         quarantineRecoveryState, Modifier.fillMaxWidth()) { quarantineOpen = true }
@@ -948,6 +953,7 @@ internal fun CodingChat(
     onSkills: (() -> Unit)? = null,
     defaultEngine: CodingEngine = CodingEngine.PI,
     onDefaultEngineChange: ((CodingEngine) -> Unit)? = null,
+    onEngineChange: ((CodingEngine) -> Unit)? = null,
     onSearchProvider: ((SearchProvider) -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     onClarify: ((String, List<Attachment>) -> Unit)? = null,
@@ -1174,7 +1180,7 @@ internal fun CodingChat(
                     modeSwitchEnabled = modeSwitchEnabled && !busy && !session.awaitingUser,
                     onPlanning = onPlanning,
                     engine = session.session.engine,
-                    onEngineChange = null,
+                    onEngineChange = onEngineChange,
                     searchProvider = session.session.searchProvider,
                     onSearchProvider = onSearchProvider,
                     onSend = onSend,
@@ -1835,7 +1841,7 @@ internal fun CodingComposer(
                 maxHeight = (maxHeight * .4f).coerceIn(80.dp, 240.dp)) {
                 if (engineMenuOpen && onEngineChange != null) {
                     PaperRichMenuAction(
-                        text = { PaperText("Backend движок", role = PaperTextRole.CHROME) },
+                        text = { PaperText("Движок", role = PaperTextRole.CHROME) },
                         leadingIcon = { PaperText("‹", role = PaperTextRole.CHROME) },
                         onClick = { engineMenuOpen = false },
                     )
@@ -1930,7 +1936,7 @@ internal fun CodingComposer(
                         if (onEngineChange != null) PaperRichMenuAction(
                             text = {
                                 Column {
-                                    PaperText("Backend движок", role = PaperTextRole.CHROME)
+                                    PaperText("Движок", role = PaperTextRole.CHROME)
                                     PaperText(engine.title, style = LocalPaperTypography.current.chrome,
                                         color = LocalPaperColors.current.secondaryText)
                                 }

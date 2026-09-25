@@ -62,7 +62,10 @@ class ComposerOptionsRenderTest {
                     assertEquals(listOf(file), draft.attachments.value)
                     assertEquals(0, sends)
                     val labels = scene.nodes().flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }.map { it.text }
-                    if (coding) assertTrue("Backend движок" in labels, "Native session retains its engine choice")
+                    if (coding) {
+                        assertTrue("Движок" in labels, "Native session offers engine selection")
+                        assertTrue(engine.title in labels, "Current engine remains visible")
+                    }
                     else {
                         assertFalse("Движок" in labels, "Provider chat must not offer a native engine")
                         assertFalse(CodingEngine.entries.any { it.title in labels })
